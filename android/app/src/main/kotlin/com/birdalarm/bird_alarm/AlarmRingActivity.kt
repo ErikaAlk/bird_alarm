@@ -46,74 +46,94 @@ class AlarmRingActivity : Activity() {
         return BirdAlarmAssets.cnNameFor(prefs.getString("ringing_asset", null))
     }
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
     private fun showAlarmUi() {
         val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
         val bgColor = if (night) Color.rgb(18, 22, 26) else Color.rgb(255, 245, 223)
         val titleColor = if (night) Color.rgb(225, 235, 233) else Color.rgb(22, 74, 69)
-        val subColor = if (night) Color.rgb(176, 188, 184) else Color.rgb(60, 51, 36)
-        val accent = Color.rgb(29, 124, 118)
+        val subColor = if (night) Color.rgb(176, 188, 184) else Color.rgb(96, 81, 56)
+        val accent = if (night) Color.rgb(95, 200, 185) else Color.rgb(29, 124, 118)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(56, 56, 56, 56)
+            setPadding(dp(32), dp(48), dp(32), dp(48))
             setBackgroundColor(bgColor)
         }
-        val title = TextView(this).apply {
-            text = "🐦 鸟瘾闹钟"
-            textSize = 30f
+
+        val now = java.util.Calendar.getInstance()
+        val timeView = TextView(this).apply {
+            text = String.format(
+                "%02d:%02d",
+                now.get(java.util.Calendar.HOUR_OF_DAY),
+                now.get(java.util.Calendar.MINUTE)
+            )
+            textSize = 60f
             setTextColor(titleColor)
             gravity = Gravity.CENTER
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
         }
-        val subtitle = TextView(this).apply {
-            text = "正在叫的是「${currentBirdName()}」"
-            textSize = 21f
+        val title = TextView(this).apply {
+            text = "🐦 鸟瘾闹钟正在响起"
+            textSize = 19f
             setTextColor(subColor)
             gravity = Gravity.CENTER
-            setPadding(0, 22, 0, 44)
+            setPadding(0, dp(8), 0, dp(30))
+        }
+        val label = TextView(this).apply {
+            text = "正在叫的是"
+            textSize = 15f
+            setTextColor(subColor)
+            gravity = Gravity.CENTER
+        }
+        val birdName = TextView(this).apply {
+            text = currentBirdName()
+            textSize = 30f
+            setTextColor(accent)
+            gravity = Gravity.CENTER
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(0, dp(4), 0, dp(44))
         }
         val stopButton = Button(this).apply {
             text = "关闭闹钟"
             textSize = 18f
             setTextColor(Color.WHITE)
+            stateListAnimator = null
             background = GradientDrawable().apply {
-                cornerRadius = 24f
+                cornerRadius = dp(28).toFloat()
                 setColor(accent)
             }
-            setPadding(0, 28, 0, 28)
+            setPadding(0, dp(16), 0, dp(16))
             setOnClickListener { stopAlarm() }
         }
         val snoozeButton = Button(this).apply {
             text = "贪睡 5 分钟"
             textSize = 16f
             setTextColor(accent)
+            stateListAnimator = null
             background = GradientDrawable().apply {
-                cornerRadius = 24f
+                cornerRadius = dp(28).toFloat()
                 setColor(Color.TRANSPARENT)
-                setStroke(3, accent)
+                setStroke(dp(2), accent)
             }
-            setPadding(0, 24, 0, 24)
+            setPadding(0, dp(14), 0, dp(14))
             setOnClickListener { snoozeAlarm() }
         }
-        val spacer = TextView(this).apply { setPadding(0, 14, 0, 0) }
 
-        val buttonParams = LinearLayout.LayoutParams(
+        fun fullWidth() = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
 
+        root.addView(timeView)
         root.addView(title)
-        root.addView(subtitle)
-        root.addView(stopButton, buttonParams)
-        root.addView(spacer)
-        root.addView(
-            snoozeButton,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
+        root.addView(label)
+        root.addView(birdName)
+        root.addView(stopButton, fullWidth())
+        root.addView(TextView(this).apply { setPadding(0, dp(6), 0, 0) })
+        root.addView(snoozeButton, fullWidth())
         setContentView(root)
     }
 

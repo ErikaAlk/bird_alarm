@@ -216,12 +216,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   Map<String, BirdName> _nameIndex = const {};
   Set<String> _downloadingIds = const {};
   Timer? _ticker;
-  DateTime? _lastTriggeredMinute;
-  ActiveAlarm? _activeAlarm;
   DateTime _now = DateTime.now();
   String? _previewingSoundId;
-  bool _loaded = false;
-  bool _checkingAlarmLaunch = false;
   bool _searching = false;
   int _selectedTab = 0;
   BirdLibraryFilter _libraryFilter = BirdLibraryFilter.all;
@@ -313,19 +309,14 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _systemAlarmChannel.setMethodCallHandler((call) async {
-      if (call.method == 'alarmFired') {
-        await _handleAlarmLaunch();
-      }
-    });
     _configureAlarmAudio();
     if (Platform.isAndroid) {
       _requestAlarmPermissions();
     }
     _load();
+    // 响铃 UI 与声音完全由原生负责（锁屏专用界面 / 通知），这里只更新首页时钟显示。
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() => _now = DateTime.now());
-      _checkAlarms();
     });
   }
 
@@ -338,13 +329,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     _apiKeyController.dispose();
     _player.dispose();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _handleAlarmLaunch();
-    }
   }
 
   Future<void> _load() async {
@@ -381,32 +365,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
         ];
       }
     });
-    _loaded = true;
     await _syncSystemAlarm();
-    await _handleAlarmLaunch();
-  }
-
-  Future<void> _handleAlarmLaunch() async {
-    if (!_loaded || _checkingAlarmLaunch || _activeAlarm != null) return;
-    _checkingAlarmLaunch = true;
-    try {
-      final launch =
-          await _systemAlarmChannel.invokeMethod<Map<dynamic, dynamic>>(
-            'consumeLaunchAlarm',
-          ) ??
-          const {};
-      final launchedByAlarm = launch['launched'] == true;
-      if (launchedByAlarm) {
-        await _ringNextEnabledAlarm(
-          assetPath: launch['assetPath'] as String?,
-          useNativeAudio: true,
-        );
-      }
-    } catch (_) {
-      // The foreground timer still covers alarms while the app is already open.
-    } finally {
-      _checkingAlarmLaunch = false;
-    }
   }
 
   Future<void> _loadNameIndex() async {
@@ -462,56 +421,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     }
   }
 
-  void _checkAlarms() {
-    if (_activeAlarm != null) return;
-    final now = DateTime.now();
-    final minuteStamp = _minuteStamp(now);
-    if (_lastTriggeredMinute == minuteStamp) return;
-    for (final alarm in _alarms.where((alarm) => alarm.enabled)) {
-      if (alarm.time.hour != now.hour || alarm.time.minute != now.minute) {
-        continue;
-      }
-      if (!_alarmRunsOnDate(alarm, now)) {
-        continue;
-      }
-      _lastTriggeredMinute = minuteStamp;
-      _ring(alarm);
-      break;
-    }
-  }
-
-  Future<void> _ring(
-    BirdAlarm alarm, {
-    String? assetPath,
-    bool useNativeAudio = false,
-  }) async {
-    _lastTriggeredMinute = _minuteStamp(DateTime.now());
-    final sound =
-        assetPath == null
-            ? _library[_random.nextInt(_library.length)]
-            : _library.firstWhere(
-              (sound) => sound.assetPath == assetPath,
-              orElse: () => _library[_random.nextInt(_library.length)],
-            );
-    await _prepareAlarmWindow();
-    setState(() {
-      _previewingSoundId = null;
-      _activeAlarm = ActiveAlarm(alarm: alarm, sound: sound);
-    });
-    if (!useNativeAudio) {
-      await _playSound(sound);
-    }
-  }
-
-  Future<void> _prepareAlarmWindow() async {
-    if (!Platform.isAndroid) return;
-    try {
-      await _systemAlarmChannel.invokeMethod<void>('prepareAlarmWindow');
-    } catch (_) {
-      // The alarm can still ring if the platform window flags are unavailable.
-    }
-  }
-
   Future<void> _requestAlarmPermissions() async {
     if (!Platform.isAndroid) return;
     try {
@@ -522,10 +431,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   Future<void> _testSystemAlarm() async {
-    if (!Platform.isAndroid) {
-      if (_alarms.isNotEmpty) await _ring(_alarms.first);
-      return;
-    }
+    if (!Platform.isAndroid) return;
     try {
       await _systemAlarmChannel.invokeMethod<void>('testSystemAlarm');
       if (mounted) {
@@ -534,34 +440,9 @@ class _AlarmHomePageState extends State<AlarmHomePage>
         ).showSnackBar(const SnackBar(content: Text('已安排 10 秒后的守护服务测试')));
       }
     } catch (_) {
-      if (_alarms.isNotEmpty) await _ring(_alarms.first);
+      // 平台通道不可用时忽略；真机上原生闹钟链路仍会按时响铃。
     }
   }
-
-  Future<void> _ringNextEnabledAlarm({
-    String? assetPath,
-    bool useNativeAudio = false,
-  }) async {
-    if (_activeAlarm != null) return;
-    final enabled = _alarms.where((alarm) => alarm.enabled).toList();
-    if (enabled.isEmpty) return;
-    final now = DateTime.now();
-    final dueNow = enabled.where((alarm) {
-      return alarm.time.hour == now.hour &&
-          alarm.time.minute == now.minute &&
-          _alarmRunsOnDate(alarm, now);
-    }).toList();
-    final candidates = dueNow.isNotEmpty ? dueNow : enabled;
-    candidates.sort((a, b) => _minutesUntil(a).compareTo(_minutesUntil(b)));
-    await _ring(
-      candidates.first,
-      assetPath: assetPath,
-      useNativeAudio: useNativeAudio,
-    );
-  }
-
-  DateTime _minuteStamp(DateTime value) =>
-      DateTime(value.year, value.month, value.day, value.hour, value.minute);
 
   Future<void> _playSound(BirdSound sound) async {
     await _player.stop();
@@ -608,12 +489,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   Future<void> _togglePreview(BirdSound sound) async {
-    if (_activeAlarm != null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('闹钟响铃中，先完成唤醒挑战。')));
-      return;
-    }
     if (_previewingSoundId == sound.id) {
       await _player.pause();
       if (mounted) setState(() => _previewingSoundId = null);
@@ -621,26 +496,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     }
     await _playSound(sound);
     if (mounted) setState(() => _previewingSoundId = sound.id);
-  }
-
-  Future<void> _dismissAlarm() async {
-    if (_activeAlarm == null) return;
-    await _player.stop();
-    await _stopNativeAlarmSound();
-    setState(() {
-      _activeAlarm = null;
-      _previewingSoundId = null;
-    });
-    await _syncSystemAlarm();
-  }
-
-  Future<void> _stopNativeAlarmSound() async {
-    if (!Platform.isAndroid && !Platform.isIOS) return;
-    try {
-      await _systemAlarmChannel.invokeMethod<void>('stopAlarmSound');
-    } catch (_) {
-      // Flutter audio has already stopped; native service may not be running.
-    }
   }
 
   Future<void> _pickLocalAudio() async {
@@ -915,65 +770,19 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   Future<void> _showSettings() async {
-    final controller = TextEditingController(text: _apiKeyController.text);
-    final saved = await showModalBottomSheet<bool>(
+    final result = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              20,
-              16,
-              20,
-              MediaQuery.of(context).viewInsets.bottom + 20,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('设置', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: controller,
-                  decoration: const InputDecoration(
-                    labelText: 'xeno-canto API Key',
-                    prefixIcon: Icon(Icons.key_outlined),
-                    helperText: '没有 Key 也可用，但请求次数有限制',
-                    helperMaxLines: 2,
-                  ),
-                  obscureText: true,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '前往 xeno-canto.org 注册账户，在个人页面获取免费 API Key，填入后可提升搜索请求额度。',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: () => Navigator.of(context).pop(true),
-                  icon: const Icon(Icons.check),
-                  label: const Text('保存'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      builder: (context) => _SettingsSheet(initialApiKey: _apiKeyController.text),
     );
-    if (saved == true) {
-      _apiKeyController.text = controller.text.trim();
+    if (result != null) {
+      _apiKeyController.text = result;
       await _save();
     }
-    controller.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final active = _activeAlarm;
     return Scaffold(
       appBar: AppBar(
         title: const Text('鸟瘾闹钟'),
@@ -1077,8 +886,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
               const _AboutPage(),
             ],
           ),
-          if (active != null)
-            AlarmOverlay(active: active, onDismiss: _dismissAlarm),
         ],
       ),
     );
@@ -1141,13 +948,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     }
     return alarm.repeatDays.isEmpty || alarm.repeatDays.contains(date.weekday);
   }
-}
-
-class ActiveAlarm {
-  final BirdAlarm alarm;
-  final BirdSound sound;
-
-  const ActiveAlarm({required this.alarm, required this.sound});
 }
 
 class _AlarmTab extends StatelessWidget {
@@ -1466,9 +1266,17 @@ class _BirdSpeechPanel extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.record_voice_over_outlined),
+              const Icon(
+                Icons.record_voice_over_outlined,
+                color: Color(0xFF164A45),
+              ),
               const SizedBox(width: 8),
-              Text('报时鸟正在值班', style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                '报时鸟正在值班',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: const Color(0xFF164A45),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -1484,16 +1292,25 @@ class _BirdSpeechPanel extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.alarm_on_outlined, size: 20),
+              const Icon(
+                Icons.alarm_on_outlined,
+                size: 20,
+                color: Color(0xFF164A45),
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('下一次唤醒'),
+                    const Text(
+                      '下一次唤醒',
+                      style: TextStyle(color: Color(0xFF3C5A54)),
+                    ),
                     Text(
                       nextAlarm,
-                      style: Theme.of(context).textTheme.titleMedium,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: const Color(0xFF164A45),
+                      ),
                     ),
                   ],
                 ),
@@ -2203,60 +2020,71 @@ class _SocialLinkTile extends StatelessWidget {
   }
 }
 
-class AlarmOverlay extends StatelessWidget {
-  final ActiveAlarm active;
-  final VoidCallback onDismiss;
+class _SettingsSheet extends StatefulWidget {
+  final String initialApiKey;
 
-  const AlarmOverlay({super.key, required this.active, required this.onDismiss});
+  const _SettingsSheet({required this.initialApiKey});
+
+  @override
+  State<_SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<_SettingsSheet> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialApiKey);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Positioned.fill(
-      child: Material(
-        color: Theme.of(context).brightness == Brightness.light
-            ? const Color(0xFFF2E8D5)
-            : Theme.of(context).colorScheme.surface,
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Spacer(),
-                const Icon(Icons.notifications_active, size: 64),
-                const SizedBox(height: 16),
-                Text(
-                  active.alarm.label,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineMedium,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  '正在叫的是',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  active.sound.cnName,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-                const SizedBox(height: 32),
-                FilledButton.icon(
-                  onPressed: onDismiss,
-                  icon: const Icon(Icons.alarm_off),
-                  label: const Text('关闭闹钟'),
-                ),
-                const Spacer(),
-                Text(
-                  '来源：${active.sound.source}',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          16,
+          20,
+          MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('设置', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _controller,
+              decoration: const InputDecoration(
+                labelText: 'xeno-canto API Key',
+                prefixIcon: Icon(Icons.key_outlined),
+                helperText: '没有 Key 也可用，但请求次数有限制',
+                helperMaxLines: 2,
+              ),
+              obscureText: true,
             ),
-          ),
+            const SizedBox(height: 8),
+            Text(
+              '前往 xeno-canto.org 注册账户，在个人页面获取免费 API Key，填入后可提升搜索请求额度。',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
+              icon: const Icon(Icons.check),
+              label: const Text('保存'),
+            ),
+          ],
         ),
       ),
     );

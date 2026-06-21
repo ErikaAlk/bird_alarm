@@ -79,6 +79,8 @@ class AlarmSoundService : Service() {
             )
         @Suppress("DEPRECATION")
         wakeLock.acquire(30_000)
+        // 先确定本轮鸟鸣，确保通知能显示正确鸟名（通知在播放器启动前就要构建）。
+        NativeAlarmPlayer.ensureRingingAsset(this)
         startForeground(NOTIFICATION_ID, buildNotification(isRinging = true))
         NativeAlarmPlayer.start(this)
         // 仅在锁屏 / 息屏时拉起全屏响铃页；亮屏解锁时只靠通知（heads-up）提醒，不打断用户。
@@ -221,9 +223,11 @@ class AlarmSoundService : Service() {
                 if (isRinging) setFullScreenIntent(contentIntent, true)
             }
             .setContentIntent(contentIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "关闭", stopIntent)
             .apply {
+                // 只有"正在响铃"的通知才给 关闭 / 贪睡 按钮；
+                // "已启用/已守护"的常驻通知不放任何按钮（避免误点关掉守护）。
                 if (isRinging) {
+                    addAction(android.R.drawable.ic_menu_close_clear_cancel, "关闭", stopIntent)
                     addAction(
                         android.R.drawable.ic_lock_idle_alarm,
                         "贪睡 $SNOOZE_MINUTES 分钟",

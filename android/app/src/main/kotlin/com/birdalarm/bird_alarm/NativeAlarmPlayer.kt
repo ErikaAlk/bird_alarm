@@ -12,14 +12,20 @@ object NativeAlarmPlayer {
 
     fun isPlaying(): Boolean = player?.isPlaying == true
 
-    fun start(context: Context) {
-        if (player?.isPlaying == true) return
-        val appContext = context.applicationContext
-        val prefs = appContext.getSharedPreferences("bird_alarm_native", Context.MODE_PRIVATE)
-        val assetPath = prefs.getString("ringing_asset", null)
+    // 决定本轮响铃的鸟鸣并持久化（若已决定则复用）。在建通知前调用，确保通知能显示正确鸟名。
+    fun ensureRingingAsset(context: Context): String {
+        val prefs = context.applicationContext
+            .getSharedPreferences("bird_alarm_native", Context.MODE_PRIVATE)
+        return prefs.getString("ringing_asset", null)
             ?: BirdAlarmAssets.sounds.random().also {
                 prefs.edit().putString("ringing_asset", it).apply()
             }
+    }
+
+    fun start(context: Context) {
+        if (player?.isPlaying == true) return
+        val appContext = context.applicationContext
+        val assetPath = ensureRingingAsset(appContext)
 
         val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         @Suppress("DEPRECATION")
@@ -77,6 +83,7 @@ object NativeAlarmPlayer {
             .getSharedPreferences("bird_alarm_native", Context.MODE_PRIVATE)
             .edit()
             .remove("ringing_asset")
+            .putBoolean("launch_alarm", false)
             .apply()
     }
 }
