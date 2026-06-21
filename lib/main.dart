@@ -354,6 +354,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     final alarmRaw = prefs.getString(_alarmsKey);
     final libraryRaw = prefs.getString(_libraryKey);
     await _loadNameIndex();
+    await ChinaHolidayData.loadCache();
     _apiKeyController.text =
         prefs.getString(_xenoApiKeyKey) ?? _apiKeyController.text;
     setState(() {
@@ -384,6 +385,10 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       }
     });
     await _syncSystemAlarm();
+    // 后台拉取最新中国节假日数据；有更新则按新数据重排闹钟。
+    ChinaHolidayData.refresh().then((changed) {
+      if (changed && mounted) _syncSystemAlarm();
+    });
   }
 
   Future<void> _loadNameIndex() async {
@@ -2168,6 +2173,76 @@ String? _mimeFor(String path) {
   return null;
 }
 
+/// 中国节假日数据：在线实时获取（timor.tech），带本地缓存；离线/失败时回退到
+/// [ChinaWorkdayCalendar] 内置的 2026 表。数据为 日期(yyyy-MM-dd) -> 是否放假。
+class ChinaHolidayData {
+  static const _dataPrefix = 'holiday_cn_data_';
+  static const _fetchedPrefix = 'holiday_cn_fetched_';
+  static final Map<String, bool> _offDays = {};
+
+  /// 查某日是否放假：true=放假, false=调休补班, null=无在线数据。
+  static bool? lookup(String dateKey) => _offDays[dateKey];
+
+  /// 用本地缓存填充内存数据（快速、无网络）。排闹钟前调用。
+  static Future<void> loadCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now();
+    for (final year in {now.year, now.year + 1}) {
+      final cached = prefs.getString('$_dataPrefix$year');
+      if (cached != null) _merge(cached);
+    }
+  }
+
+  /// 后台刷新当前年与次年的数据；有更新返回 true（调用方可据此重排闹钟）。
+  static Future<bool> refresh() async {
+    final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now();
+    var changed = false;
+    for (final year in {now.year, now.year + 1}) {
+      final fetchedAt = prefs.getInt('$_fetchedPrefix$year') ?? 0;
+      final hasCache = prefs.getString('$_dataPrefix$year') != null;
+      final ageMs = now.millisecondsSinceEpoch - fetchedAt;
+      if (hasCache && ageMs < 7 * 86400000) continue; // 一周内刷过就跳过
+      try {
+        final resp = await http
+            .get(Uri.parse('https://timor.tech/api/holiday/year/$year'))
+            .timeout(const Duration(seconds: 8));
+        if (resp.statusCode == 200 && _merge(resp.body)) {
+          await prefs.setString('$_dataPrefix$year', resp.body);
+          await prefs.setInt('$_fetchedPrefix$year', now.millisecondsSinceEpoch);
+          changed = true;
+        }
+      } catch (_) {
+        // 离线/失败：继续用缓存或内置 2026 表。
+      }
+    }
+    return changed;
+  }
+
+  // 解析 timor.tech 返回并合并进内存；解析到有效数据返回 true。
+  static bool _merge(String body) {
+    try {
+      final map = jsonDecode(body) as Map<String, dynamic>;
+      final holiday = map['holiday'];
+      if (holiday is! Map) return false;
+      var any = false;
+      for (final value in holiday.values) {
+        if (value is Map) {
+          final date = value['date'] as String?;
+          final isOff = value['holiday'] as bool?;
+          if (date != null && isOff != null) {
+            _offDays[date] = isOff;
+            any = true;
+          }
+        }
+      }
+      return any;
+    } catch (_) {
+      return false;
+    }
+  }
+}
+
 class ChinaWorkdayCalendar {
   static const _holidayDates2026 = {
     '2026-01-01',
@@ -2215,17 +2290,24 @@ class ChinaWorkdayCalendar {
   };
 
   static bool isWorkday(DateTime date) {
-    final key = _dateKey(date);
-    if (_adjustedWorkDates2026.contains(key)) return true;
-    if (_holidayDates2026.contains(key)) return false;
+    final off = _offDayOverride(_dateKey(date));
+    if (off != null) return !off;
     return date.weekday >= DateTime.monday && date.weekday <= DateTime.friday;
   }
 
   // 是否为中国法定节假日（放假日）。调休补班日不算节假日。
   static bool isHoliday(DateTime date) {
-    final key = _dateKey(date);
+    return _offDayOverride(_dateKey(date)) ?? false;
+  }
+
+  // 该日期是否放假：true=放假, false=调休补班, null=普通日（按周一~周五判断）。
+  // 优先用在线节假日数据（ChinaHolidayData），无则回退到内置 2026 表。
+  static bool? _offDayOverride(String key) {
+    final online = ChinaHolidayData.lookup(key);
+    if (online != null) return online;
     if (_adjustedWorkDates2026.contains(key)) return false;
-    return _holidayDates2026.contains(key);
+    if (_holidayDates2026.contains(key)) return true;
+    return null;
   }
 
   static String _dateKey(DateTime date) {

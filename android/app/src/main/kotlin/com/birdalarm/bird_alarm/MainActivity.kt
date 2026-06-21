@@ -318,6 +318,24 @@ class MainActivity : FlutterActivity() {
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2001)
         }
+        // Android 14 (API 34)+ 默认不再授予 USE_FULL_SCREEN_INTENT，否则锁屏响铃会被
+        // 降级成普通横幅通知而非全屏。引导用户授予"全屏通知"权限以恢复锁屏全屏响铃。
+        if (Build.VERSION.SDK_INT >= 34) {
+            val notificationManager =
+                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (!notificationManager.canUseFullScreenIntent()) {
+                try {
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                            Uri.parse("package:$packageName")
+                        )
+                    )
+                    return
+                } catch (_: Exception) {
+                }
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
             if (!alarmManager.canScheduleExactAlarms()) {
