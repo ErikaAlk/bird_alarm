@@ -69,7 +69,7 @@ class AlarmReceiver : BroadcastReceiver() {
         // 单独 notify(1001)，避免抢同一 id。锁屏/息屏时直接拉起全屏响铃页（targetSdk 33
         // 下系统允许闹钟从后台启动 Activity）；亮屏已解锁时只用通知，不打断用户。
         if (shouldUseFullScreen(context)) {
-            val activityIntent = Intent(context, AlarmRingActivity::class.java).apply {
+            val activityIntent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP or

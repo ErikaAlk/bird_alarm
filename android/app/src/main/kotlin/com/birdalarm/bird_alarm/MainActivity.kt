@@ -19,6 +19,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.WindowManager
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.MethodChannel
@@ -88,6 +89,10 @@ class MainActivity : FlutterActivity() {
                 }
                 "stopAlarmSound" -> {
                     stopAlarmSound()
+                    result.success(null)
+                }
+                "snoozeAlarm" -> {
+                    snoozeAlarm()
                     result.success(null)
                 }
                 "testSystemAlarm" -> {
@@ -306,9 +311,32 @@ class MainActivity : FlutterActivity() {
             .apply()
     }
 
+    private fun snoozeAlarm() {
+        // 供 Flutter 响铃遮罩的"贪睡"按钮使用：把贪睡动作交给前台服务处理
+        // （停当前铃 + N 分钟后重排）。服务此时已在前台运行，startService 即可送达。
+        startService(
+            Intent(this, AlarmSoundService::class.java)
+                .setAction(AlarmSoundService.ACTION_SNOOZE)
+        )
+    }
+
+    // 让响铃时的主界面（Flutter 全屏响铃遮罩）显示在锁屏之上、并点亮屏幕。
+    // 不调用 requestDismissKeyguard：用户无需解锁即可在遮罩上关闭/贪睡。
     private fun prepareAlarmWindow() {
-        // 故意留空：主界面不再显示在锁屏之上。响铃时的锁屏界面由原生
-        // AlarmRingActivity 负责；普通主界面表现为普通应用（锁屏点亮不显示本应用）。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
+        )
     }
 
     private fun requestAlarmPermissions() {

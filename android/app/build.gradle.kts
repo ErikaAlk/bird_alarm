@@ -27,11 +27,10 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
-        // 故意停留在 33（Android 13）：Android 14+ 收紧了后台启动 Activity(BAL) 与
-        // 全屏通知权限，会导致锁屏闹钟无法从后台拉起全屏页（只剩横幅）。停在 33 可让
-        // 闹钟可靠地从后台直接弹出全屏响铃页。代价是 Live Updates 提级胶囊可能退化为
-        // 普通通知——全屏闹钟优先。
-        targetSdk = 33
+        // Live Updates 要求 App targeting API 36 才会被系统提级。
+        // 锁屏全屏响铃靠 MainActivity 的 showWhenLocked + Flutter 全屏遮罩实现
+        // （主界面会显示在锁屏上），与 targetSdk 36 兼容。
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

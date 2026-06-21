@@ -234,8 +234,12 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   Map<String, BirdName> _nameIndex = const {};
   Set<String> _downloadingIds = const {};
   Timer? _ticker;
+  DateTime? _lastTriggeredMinute;
+  ActiveAlarm? _activeAlarm;
   DateTime _now = DateTime.now();
   String? _previewingSoundId;
+  bool _loaded = false;
+  bool _checkingAlarmLaunch = false;
   bool _searching = false;
   int _selectedTab = 0;
   BirdLibraryFilter _libraryFilter = BirdLibraryFilter.all;
@@ -327,15 +331,27 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _systemAlarmChannel.setMethodCallHandler((call) async {
+      if (call.method == 'alarmFired') {
+        await _handleAlarmLaunch();
+      }
+    });
     _configureAlarmAudio();
     if (Platform.isAndroid) {
       _requestAlarmPermissions();
     }
     _load();
-    // 响铃 UI 与声音完全由原生负责（锁屏专用界面 / 通知），这里只更新首页时钟显示。
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() => _now = DateTime.now());
+      _checkAlarms();
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _handleAlarmLaunch();
+    }
   }
 
   @override
@@ -384,11 +400,144 @@ class _AlarmHomePageState extends State<AlarmHomePage>
         ];
       }
     });
+    _loaded = true;
     await _syncSystemAlarm();
+    await _handleAlarmLaunch();
     // 后台拉取最新中国节假日数据；有更新则按新数据重排闹钟。
     ChinaHolidayData.refresh().then((changed) {
       if (changed && mounted) _syncSystemAlarm();
     });
+  }
+
+  Future<void> _handleAlarmLaunch() async {
+    if (!_loaded || _checkingAlarmLaunch || _activeAlarm != null) return;
+    _checkingAlarmLaunch = true;
+    try {
+      final launch =
+          await _systemAlarmChannel.invokeMethod<Map<dynamic, dynamic>>(
+            'consumeLaunchAlarm',
+          ) ??
+          const {};
+      if (launch['launched'] == true) {
+        await _ringNextEnabledAlarm(
+          assetPath: launch['assetPath'] as String?,
+          useNativeAudio: true,
+        );
+      }
+    } catch (_) {
+      // 前台计时器在 app 已打开时仍能兜底响铃。
+    } finally {
+      _checkingAlarmLaunch = false;
+    }
+  }
+
+  void _checkAlarms() {
+    if (_activeAlarm != null) return;
+    final now = DateTime.now();
+    final minuteStamp = _minuteStamp(now);
+    if (_lastTriggeredMinute == minuteStamp) return;
+    for (final alarm in _alarms.where((alarm) => alarm.enabled)) {
+      if (alarm.time.hour != now.hour || alarm.time.minute != now.minute) {
+        continue;
+      }
+      if (!_alarmRunsOnDate(alarm, now)) continue;
+      _lastTriggeredMinute = minuteStamp;
+      _ring(alarm);
+      break;
+    }
+  }
+
+  DateTime _minuteStamp(DateTime value) =>
+      DateTime(value.year, value.month, value.day, value.hour, value.minute);
+
+  Future<void> _ring(
+    BirdAlarm alarm, {
+    String? assetPath,
+    bool useNativeAudio = false,
+  }) async {
+    _lastTriggeredMinute = _minuteStamp(DateTime.now());
+    final sound =
+        assetPath == null
+            ? _library[_random.nextInt(_library.length)]
+            : _library.firstWhere(
+              (sound) => sound.assetPath == assetPath,
+              orElse: () => _library[_random.nextInt(_library.length)],
+            );
+    await _prepareAlarmWindow();
+    setState(() {
+      _previewingSoundId = null;
+      _activeAlarm = ActiveAlarm(alarm: alarm, sound: sound);
+    });
+    if (!useNativeAudio) {
+      await _playSound(sound);
+    }
+  }
+
+  Future<void> _ringNextEnabledAlarm({
+    String? assetPath,
+    bool useNativeAudio = false,
+  }) async {
+    if (_activeAlarm != null) return;
+    final enabled = _alarms.where((alarm) => alarm.enabled).toList();
+    if (enabled.isEmpty) return;
+    final now = DateTime.now();
+    final dueNow = enabled.where((alarm) {
+      return alarm.time.hour == now.hour &&
+          alarm.time.minute == now.minute &&
+          _alarmRunsOnDate(alarm, now);
+    }).toList();
+    final candidates = dueNow.isNotEmpty ? dueNow : enabled;
+    candidates.sort((a, b) => _minutesUntil(a).compareTo(_minutesUntil(b)));
+    await _ring(
+      candidates.first,
+      assetPath: assetPath,
+      useNativeAudio: useNativeAudio,
+    );
+  }
+
+  Future<void> _prepareAlarmWindow() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _systemAlarmChannel.invokeMethod<void>('prepareAlarmWindow');
+    } catch (_) {
+      // 平台窗口标志不可用时，闹钟仍能响铃。
+    }
+  }
+
+  Future<void> _dismissAlarm() async {
+    if (_activeAlarm == null) return;
+    await _player.stop();
+    await _stopNativeAlarmSound();
+    setState(() {
+      _activeAlarm = null;
+      _previewingSoundId = null;
+    });
+    await _syncSystemAlarm();
+  }
+
+  Future<void> _snoozeAlarm() async {
+    if (_activeAlarm == null) return;
+    await _player.stop();
+    if (Platform.isAndroid) {
+      try {
+        await _systemAlarmChannel.invokeMethod<void>('snoozeAlarm');
+      } catch (_) {
+        // 平台通道不可用时忽略。
+      }
+    }
+    setState(() {
+      _activeAlarm = null;
+      _previewingSoundId = null;
+    });
+  }
+
+  Future<void> _stopNativeAlarmSound() async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    try {
+      await _systemAlarmChannel.invokeMethod<void>('stopAlarmSound');
+    } catch (_) {
+      // Flutter 音频已停；原生服务可能未在运行。
+    }
   }
 
   Future<void> _loadNameIndex() async {
@@ -512,6 +661,12 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   Future<void> _togglePreview(BirdSound sound) async {
+    if (_activeAlarm != null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('闹钟响铃中，先关闭闹钟。')));
+      return;
+    }
     if (_previewingSoundId == sound.id) {
       await _player.pause();
       if (mounted) setState(() => _previewingSoundId = null);
@@ -806,7 +961,11 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final active = _activeAlarm;
+    return Stack(
+      textDirection: TextDirection.ltr,
+      children: [
+        Scaffold(
       appBar: AppBar(
         title: const Text('鸟瘾闹钟'),
         actions: [
@@ -911,6 +1070,16 @@ class _AlarmHomePageState extends State<AlarmHomePage>
           ),
         ],
       ),
+    ),
+        if (active != null)
+          Positioned.fill(
+            child: AlarmOverlay(
+              active: active,
+              onDismiss: _dismissAlarm,
+              onSnooze: _snoozeAlarm,
+            ),
+          ),
+      ],
     );
   }
 
@@ -2135,6 +2304,98 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               label: const Text('保存'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class ActiveAlarm {
+  final BirdAlarm alarm;
+  final BirdSound sound;
+
+  const ActiveAlarm({required this.alarm, required this.sound});
+}
+
+/// 全屏响铃遮罩：铺满整个屏幕（盖住底部导航栏），显示正在叫的鸟 + 关闭 / 贪睡。
+/// 由 MainActivity 的 showWhenLocked 让它能显示在锁屏之上。
+class AlarmOverlay extends StatelessWidget {
+  final ActiveAlarm active;
+  final VoidCallback onDismiss;
+  final VoidCallback onSnooze;
+
+  const AlarmOverlay({
+    super.key,
+    required this.active,
+    required this.onDismiss,
+    required this.onSnooze,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final light = theme.brightness == Brightness.light;
+    return Material(
+      color: light ? const Color(0xFFFFF5DF) : theme.colorScheme.surface,
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+              Icon(
+                Icons.notifications_active,
+                size: 72,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(height: 20),
+              Text(
+                active.alarm.label,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 18),
+              Text(
+                '正在叫的是',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                active.sound.cnName,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.displaySmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const Spacer(),
+              FilledButton.icon(
+                onPressed: onDismiss,
+                icon: const Icon(Icons.alarm_off),
+                label: const Text('关闭闹钟'),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: onSnooze,
+                icon: const Icon(Icons.snooze),
+                label: const Text('贪睡 5 分钟'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '来源：${active.sound.source}',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
         ),
       ),
     );

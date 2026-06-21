@@ -83,12 +83,12 @@ class AlarmSoundService : Service() {
         NativeAlarmPlayer.ensureRingingAsset(this)
         startForeground(NOTIFICATION_ID, buildNotification(isRinging = true))
         NativeAlarmPlayer.start(this)
-        // 锁屏/息屏时直接拉起全屏响铃页（targetSdk 33 下系统允许闹钟从后台启动 Activity）；
-        // 亮屏已解锁时不打断用户，只用通知。通知的全屏意图作为兜底。
+        // 锁屏/息屏时把主界面(MainActivity, 含 showWhenLocked)带到前台显示 Flutter 全屏
+        // 响铃遮罩；亮屏已解锁时不打断用户，只用通知。通知的全屏意图作为兜底。
         if (shouldUseFullScreen()) {
             try {
                 startActivity(
-                    Intent(this, AlarmRingActivity::class.java).apply {
+                    Intent(this, MainActivity::class.java).apply {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                             Intent.FLAG_ACTIVITY_CLEAR_TOP or
                             Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -167,9 +167,8 @@ class AlarmSoundService : Service() {
             notificationManager.createNotificationChannel(channel)
         }
 
-        val contentActivity =
-            if (isRinging) AlarmRingActivity::class.java else MainActivity::class.java
-        val activityIntent = Intent(this, contentActivity).apply {
+        // 始终指向 MainActivity：响铃时带 launch_alarm，由 Flutter 显示全屏响铃遮罩。
+        val activityIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
                 Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -225,10 +224,9 @@ class AlarmSoundService : Service() {
             }
             .setContentIntent(contentIntent)
             .apply {
-                // 只有"正在响铃"的通知才给 关闭 / 贪睡 按钮。
-                // 注意：响铃通知【不】提级为 Live Update——在 ColorOS 等 ROM 上，
-                // 一旦被做成流体云胶囊就会吞掉「全屏意图」，导致锁屏只剩横幅、无法全屏。
-                // 全屏响铃靠 setFullScreenIntent 拉起；Live Update 只用在"即将响铃"倒计时上。
+                // 只有"正在响铃"时才给 关闭 / 贪睡 按钮，并提级为 Live Update（流体云胶囊）。
+                // 全屏响铃由 MainActivity(showWhenLocked) + Flutter 全屏遮罩负责，与这里的
+                // 提级互不影响，所以 Live Update 与全屏可同时成立。
                 if (isRinging) {
                     addAction(android.R.drawable.ic_menu_close_clear_cancel, "关闭", stopIntent)
                     addAction(
@@ -236,6 +234,7 @@ class AlarmSoundService : Service() {
                         "贪睡 $SNOOZE_MINUTES 分钟",
                         snoozeIntent
                     )
+                    AlarmReceiver.requestPromotedOngoing(this)
                 }
             }
             .build()
