@@ -1,15 +1,13 @@
 package com.birdalarm.bird_alarm
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.AlarmManager
+import android.app.KeyguardManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
-import android.app.Notification
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -45,22 +43,32 @@ class AlarmReceiver : BroadcastReceiver() {
                 context.startService(soundIntent)
             }
         } catch (_: Exception) {
-            // The receiver-level player already started as the fallback alarm.
+            // 前台服务启动失败时，上面的 NativeAlarmPlayer 已作为兜底在响铃。
         }
 
-        val activityIntent = Intent(context, AlarmRingActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-            putExtra("launch_alarm", true)
+        // 响铃通知统一由 AlarmSoundService 负责（含全屏 intent + 关闭/贪睡动作），
+        // 这里不再单独 notify(1001)，避免与服务通知抢同一 id 互相覆盖。
+        // 仅在锁屏 / 息屏时主动拉起全屏响铃页；亮屏解锁时交给通知（heads-up），不打断用户。
+        if (shouldUseFullScreen(context)) {
+            val activityIntent = Intent(context, AlarmRingActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                putExtra("launch_alarm", true)
+            }
+            try {
+                context.startActivity(activityIntent)
+            } catch (_: Exception) {
+            }
         }
-        showFullScreenNotification(context, activityIntent)
-        try {
-            context.startActivity(activityIntent)
-        } catch (_: Exception) {
-            // The full-screen alarm notification remains as the fallback entry point.
-        }
+    }
+
+    // 锁屏或息屏 → 需要全屏响铃页唤醒；亮屏且已解锁 → 只用通知提醒。
+    private fun shouldUseFullScreen(context: Context): Boolean {
+        val keyguardManager = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        return keyguardManager.isKeyguardLocked || !powerManager.isInteractive
     }
 
     private fun cancelThisAlarmRound(context: Context) {
@@ -89,51 +97,5 @@ class AlarmReceiver : BroadcastReceiver() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
         )
-    }
-
-    private fun showFullScreenNotification(context: Context, activityIntent: Intent) {
-        val channelId = "bird_alarm_ringing"
-        val notificationManager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "鸟瘾闹钟响铃",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "闹钟响铃和强制清醒挑战"
-                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
-            }
-            notificationManager.createNotificationChannel(channel)
-        }
-
-        val fullScreenIntent = PendingIntent.getActivity(
-            context,
-            1002,
-            activityIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val builder =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                Notification.Builder(context, channelId)
-            } else {
-                @Suppress("DEPRECATION")
-                Notification.Builder(context)
-            }
-        val notification = builder
-            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-            .setContentTitle("鸟瘾闹钟")
-            .setContentText("随机鸟鸣正在响起，点这里进入强制清醒挑战")
-            .setTicker("鸟瘾闹钟正在响铃")
-            .setCategory(Notification.CATEGORY_ALARM)
-            .setPriority(Notification.PRIORITY_MAX)
-            .setOngoing(true)
-            .setAutoCancel(false)
-            .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .setFullScreenIntent(fullScreenIntent, true)
-            .setContentIntent(fullScreenIntent)
-            .build()
-
-        notificationManager.notify(1001, notification)
     }
 }

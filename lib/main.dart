@@ -44,8 +44,6 @@ class BirdAlarmApp extends StatelessWidget {
   }
 }
 
-enum AlarmMode { normal, awakeChallenge }
-
 enum BirdLibraryFilter { all, downloaded, notDownloaded }
 
 class BirdSound {
@@ -125,7 +123,6 @@ class BirdAlarm {
   final TimeOfDay time;
   final Set<int> repeatDays;
   final bool useChinaWorkdays;
-  final AlarmMode mode;
   final bool enabled;
   final String label;
 
@@ -134,7 +131,6 @@ class BirdAlarm {
     required this.time,
     required this.repeatDays,
     required this.useChinaWorkdays,
-    required this.mode,
     required this.enabled,
     required this.label,
   });
@@ -143,7 +139,6 @@ class BirdAlarm {
     TimeOfDay? time,
     Set<int>? repeatDays,
     bool? useChinaWorkdays,
-    AlarmMode? mode,
     bool? enabled,
     String? label,
   }) => BirdAlarm(
@@ -151,7 +146,6 @@ class BirdAlarm {
     time: time ?? this.time,
     repeatDays: repeatDays ?? this.repeatDays,
     useChinaWorkdays: useChinaWorkdays ?? this.useChinaWorkdays,
-    mode: mode ?? this.mode,
     enabled: enabled ?? this.enabled,
     label: label ?? this.label,
   );
@@ -167,10 +161,6 @@ class BirdAlarm {
             .map((day) => day as int)
             .toSet(),
     useChinaWorkdays: json['useChinaWorkdays'] as bool? ?? false,
-    mode:
-        (json['mode'] as String?) == 'awakeChallenge'
-            ? AlarmMode.awakeChallenge
-            : AlarmMode.normal,
     enabled: json['enabled'] as bool? ?? true,
     label: json['label'] as String? ?? '晨间鸟鸣',
   );
@@ -181,7 +171,6 @@ class BirdAlarm {
     'minute': time.minute,
     'repeatDays': repeatDays.toList()..sort(),
     'useChinaWorkdays': useChinaWorkdays,
-    'mode': mode.name,
     'enabled': enabled,
     'label': label,
   };
@@ -364,9 +353,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
             time: const TimeOfDay(hour: 7, minute: 30),
             repeatDays: {1, 2, 3, 4, 5},
             useChinaWorkdays: false,
-            mode: AlarmMode.awakeChallenge,
             enabled: true,
-            label: '工作日鸟鸣挑战',
+            label: '工作日鸟鸣',
           ),
         ];
       }
@@ -491,11 +479,10 @@ class _AlarmHomePageState extends State<AlarmHomePage>
               (sound) => sound.assetPath == assetPath,
               orElse: () => _library[_random.nextInt(_library.length)],
             );
-    final options = _makeOptions(sound);
     await _prepareAlarmWindow();
     setState(() {
       _previewingSoundId = null;
-      _activeAlarm = ActiveAlarm(alarm: alarm, sound: sound, options: options);
+      _activeAlarm = ActiveAlarm(alarm: alarm, sound: sound);
     });
     if (!useNativeAudio) {
       await _playSound(sound);
@@ -562,12 +549,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   DateTime _minuteStamp(DateTime value) =>
       DateTime(value.year, value.month, value.day, value.hour, value.minute);
 
-  List<BirdSound> _makeOptions(BirdSound answer) {
-    final pool =
-        _library.where((sound) => sound.id != answer.id).toList()..shuffle();
-    return ([answer, ...pool.take(3)]..shuffle()).toList();
-  }
-
   Future<void> _playSound(BirdSound sound) async {
     await _player.stop();
     await _configureAlarmAudio();
@@ -628,9 +609,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     if (mounted) setState(() => _previewingSoundId = sound.id);
   }
 
-  Future<void> _dismissAlarm({required bool force}) async {
+  Future<void> _dismissAlarm() async {
     if (_activeAlarm == null) return;
-    if (!force && _activeAlarm!.alarm.mode == AlarmMode.awakeChallenge) return;
     await _player.stop();
     await _stopNativeAlarmSound();
     setState(() {
@@ -1082,19 +1062,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
             ],
           ),
           if (active != null)
-            AlarmOverlay(
-              active: active,
-              onNormalDismiss: () => _dismissAlarm(force: true),
-              onAnswer: (sound) {
-                if (sound.id == active.sound.id) {
-                  _dismissAlarm(force: true);
-                } else {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(const SnackBar(content: Text('还没醒透，再听一次。')));
-                }
-              },
-            ),
+            AlarmOverlay(active: active, onDismiss: _dismissAlarm),
         ],
       ),
     );
@@ -1162,13 +1130,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 class ActiveAlarm {
   final BirdAlarm alarm;
   final BirdSound sound;
-  final List<BirdSound> options;
 
-  const ActiveAlarm({
-    required this.alarm,
-    required this.sound,
-    required this.options,
-  });
+  const ActiveAlarm({required this.alarm, required this.sound});
 }
 
 class _AlarmTab extends StatelessWidget {
@@ -1230,7 +1193,6 @@ class _AlarmEditorState extends State<AlarmEditor> {
   late TimeOfDay _time;
   late Set<int> _days;
   late bool _useChinaWorkdays;
-  late AlarmMode _mode;
   late TextEditingController _labelController;
 
   @override
@@ -1239,7 +1201,6 @@ class _AlarmEditorState extends State<AlarmEditor> {
     _time = widget.alarm?.time ?? TimeOfDay.now();
     _days = {...?widget.alarm?.repeatDays};
     _useChinaWorkdays = widget.alarm?.useChinaWorkdays ?? false;
-    _mode = widget.alarm?.mode ?? AlarmMode.awakeChallenge;
     _labelController = TextEditingController(
       text: widget.alarm?.label ?? '鸟鸣唤醒',
     );
@@ -1316,24 +1277,6 @@ class _AlarmEditorState extends State<AlarmEditor> {
                   ),
               ],
             ),
-            const SizedBox(height: 16),
-            SegmentedButton<AlarmMode>(
-              segments: const [
-                ButtonSegment(
-                  value: AlarmMode.normal,
-                  label: Text('普通模式'),
-                  icon: Icon(Icons.volume_up_outlined),
-                ),
-                ButtonSegment(
-                  value: AlarmMode.awakeChallenge,
-                  label: Text('强制认鸟'),
-                  icon: Icon(Icons.quiz_outlined),
-                ),
-              ],
-              selected: {_mode},
-              onSelectionChanged:
-                  (value) => setState(() => _mode = value.first),
-            ),
             const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: () {
@@ -1345,7 +1288,6 @@ class _AlarmEditorState extends State<AlarmEditor> {
                     time: _time,
                     repeatDays: _days,
                     useChinaWorkdays: _useChinaWorkdays,
-                    mode: _mode,
                     enabled: widget.alarm?.enabled ?? true,
                     label:
                         _labelController.text.trim().isEmpty
@@ -1722,18 +1664,12 @@ class _AlarmTile extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: ListTile(
         onTap: onTap,
-        leading: Icon(
-          alarm.mode == AlarmMode.awakeChallenge
-              ? Icons.quiz_outlined
-              : Icons.music_note_outlined,
-        ),
+        leading: const Icon(Icons.music_note_outlined),
         title: Text(
           alarm.time.format(context),
           style: Theme.of(context).textTheme.headlineSmall,
         ),
-        subtitle: Text(
-          '${alarm.label} · ${_repeatText(alarm)} · ${alarm.mode == AlarmMode.awakeChallenge ? '强制认鸟' : '普通模式'}',
-        ),
+        subtitle: Text('${alarm.label} · ${_repeatText(alarm)}'),
         trailing: Wrap(
           spacing: 2,
           crossAxisAlignment: WrapCrossAlignment.center,
@@ -2238,19 +2174,12 @@ class _SocialLinkTile extends StatelessWidget {
 
 class AlarmOverlay extends StatelessWidget {
   final ActiveAlarm active;
-  final VoidCallback onNormalDismiss;
-  final ValueChanged<BirdSound> onAnswer;
+  final VoidCallback onDismiss;
 
-  const AlarmOverlay({
-    super.key,
-    required this.active,
-    required this.onNormalDismiss,
-    required this.onAnswer,
-  });
+  const AlarmOverlay({super.key, required this.active, required this.onDismiss});
 
   @override
   Widget build(BuildContext context) {
-    final challenge = active.alarm.mode == AlarmMode.awakeChallenge;
     return Positioned.fill(
       child: Material(
         color: const Color(0xFFF2E8D5),
@@ -2260,6 +2189,7 @@ class AlarmOverlay extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                const Spacer(),
                 const Icon(Icons.notifications_active, size: 64),
                 const SizedBox(height: 16),
                 Text(
@@ -2267,27 +2197,24 @@ class AlarmOverlay extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 12),
                 Text(
-                  challenge ? '强制认鸟模式：答对才能关闭' : '普通模式：随机鸟鸣正在响起',
+                  '正在叫的是',
                   textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium,
                 ),
-                const SizedBox(height: 24),
-                if (challenge)
-                  for (final option in active.options)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: FilledButton.tonal(
-                        onPressed: () => onAnswer(option),
-                        child: Text(option.cnName),
-                      ),
-                    )
-                else
-                  FilledButton.icon(
-                    onPressed: onNormalDismiss,
-                    icon: const Icon(Icons.alarm_off),
-                    label: const Text('关闭闹钟'),
-                  ),
+                const SizedBox(height: 4),
+                Text(
+                  active.sound.cnName,
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 32),
+                FilledButton.icon(
+                  onPressed: onDismiss,
+                  icon: const Icon(Icons.alarm_off),
+                  label: const Text('关闭闹钟'),
+                ),
                 const Spacer(),
                 Text(
                   '来源：${active.sound.source}',

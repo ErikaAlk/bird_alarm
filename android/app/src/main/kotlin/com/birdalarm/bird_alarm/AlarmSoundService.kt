@@ -1,5 +1,7 @@
 package com.birdalarm.bird_alarm
 
+import android.app.AlarmManager
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -33,6 +35,10 @@ class AlarmSoundService : Service() {
             ACTION_RING -> {
                 ring()
                 return START_STICKY
+            }
+            ACTION_SNOOZE -> {
+                snooze()
+                return START_NOT_STICKY
             }
         }
         startForeground(NOTIFICATION_ID, buildNotification(isRinging = false))
@@ -75,18 +81,68 @@ class AlarmSoundService : Service() {
         wakeLock.acquire(30_000)
         startForeground(NOTIFICATION_ID, buildNotification(isRinging = true))
         NativeAlarmPlayer.start(this)
+        // 仅在锁屏 / 息屏时拉起全屏响铃页；亮屏解锁时只靠通知（heads-up）提醒，不打断用户。
+        if (shouldUseFullScreen()) {
+            try {
+                startActivity(
+                    Intent(this, AlarmRingActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        putExtra("launch_alarm", true)
+                    }
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    // 贪睡：停掉当前铃声与通知，N 分钟后重新触发响铃。
+    private fun snooze() {
+        NativeAlarmPlayer.stop(this)
+        val triggerAt = System.currentTimeMillis() + SNOOZE_MINUTES * 60_000L
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            SNOOZE_REQUEST_CODE,
+            Intent(this, AlarmReceiver::class.java).putExtra("launch_alarm", true),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         try {
-            startActivity(
-                Intent(this, AlarmRingActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    putExtra("launch_alarm", true)
-                }
-            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
+            }
         } catch (_: Exception) {
         }
+        val notificationManager =
+            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(NOTIFICATION_ID)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        stopSelf()
+    }
+
+    // 锁屏或息屏 → 需要全屏响铃页唤醒；亮屏且已解锁 → 只用通知提醒。
+    private fun shouldUseFullScreen(): Boolean {
+        val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        return keyguardManager.isKeyguardLocked || !powerManager.isInteractive
+    }
+
+    private fun currentBirdName(): String {
+        val prefs = getSharedPreferences("bird_alarm_native", Context.MODE_PRIVATE)
+        return BirdAlarmAssets.cnNameFor(prefs.getString("ringing_asset", null))
     }
 
     private fun buildNotification(
@@ -129,6 +185,12 @@ class AlarmSoundService : Service() {
             Intent(this, AlarmSoundService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val snoozeIntent = PendingIntent.getService(
+            this,
+            1006,
+            Intent(this, AlarmSoundService::class.java).setAction(ACTION_SNOOZE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val builder =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 Notification.Builder(this, channelId)
@@ -138,11 +200,11 @@ class AlarmSoundService : Service() {
             }
         val contentText =
             if (isRinging) {
-                "随机鸟鸣正在响起，点这里进入强制清醒挑战"
+                "正在叫的是「${currentBirdName()}」"
             } else {
                 "下一次鸟鸣闹钟已守护"
             }
-        val title = if (isRinging) "鸟瘾闹钟" else "鸟瘾闹钟已启用"
+        val title = if (isRinging) "🐦 鸟瘾闹钟正在响起" else "鸟瘾闹钟已启用"
         return builder
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle(title)
@@ -159,7 +221,16 @@ class AlarmSoundService : Service() {
                 if (isRinging) setFullScreenIntent(contentIntent, true)
             }
             .setContentIntent(contentIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "停止", stopIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "关闭", stopIntent)
+            .apply {
+                if (isRinging) {
+                    addAction(
+                        android.R.drawable.ic_lock_idle_alarm,
+                        "贪睡 $SNOOZE_MINUTES 分钟",
+                        snoozeIntent
+                    )
+                }
+            }
             .build()
     }
 
@@ -167,8 +238,11 @@ class AlarmSoundService : Service() {
         const val ACTION_ARM = "com.birdalarm.bird_alarm.ARM_ALARM_SOUND"
         const val ACTION_RING = "com.birdalarm.bird_alarm.RING_ALARM_SOUND"
         const val ACTION_STOP = "com.birdalarm.bird_alarm.STOP_ALARM_SOUND"
+        const val ACTION_SNOOZE = "com.birdalarm.bird_alarm.SNOOZE_ALARM_SOUND"
         const val EXTRA_TRIGGER_AT_MILLIS = "trigger_at_millis"
         const val CHANNEL_ID = "bird_alarm_ringing"
         const val NOTIFICATION_ID = 1001
+        const val SNOOZE_MINUTES = 5
+        const val SNOOZE_REQUEST_CODE = 1005
     }
 }
