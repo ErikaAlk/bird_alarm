@@ -11,8 +11,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Flutter 在 `C:\dev\flutter\bin`（**不一定在 PATH 上**；脚本里用全路径或 `$env:Path += ";C:\dev\flutter\bin"`）。Dart 3.12 / Flutter 3.44。
 - `flutter analyze` —— **Dart 改动的主要自验手段**（不需要 Gradle，秒级返回；改完 Dart 必跑）。
 - `flutter test` / `flutter test test/widget_test.dart` —— 唯一的测试是 `test/widget_test.dart`（首页渲染冒烟测试）。
-- `flutter build apk --debug` —— 完整构建（含 Kotlin）。**只有它能验证原生改动**。
-- `.\install.bat`（或 `.\install.ps1`）—— 构建 + adb 覆盖安装 + 启动，参数 `-Release` / `-NoBuild` / `-NoLaunch`。`.bat` 是绕执行策略的包装器。
+- `flutter build apk --release --split-per-abi` —— **默认构建方式**（含 Kotlin 的完整构建，能验证原生改动）。**一律用 release，不再用 debug**；按架构拆分，产物 `build\app\outputs\flutter-apk\app-<abi>-release.apk`（arm64-v8a / armeabi-v7a / x86_64）。装机/发版都以此为准。
+- `.\install.bat`（或 `.\install.ps1`）—— 构建 release 拆分包 + adb 覆盖安装 + 启动，**默认装 arm64-v8a**。参数 `-Abi armeabi-v7a|x86_64`（换架构）/ `-NoBuild`（用已有包）/ `-NoLaunch`。`.bat` 是绕执行策略的包装器。
 
 构建环境注意：
 - 需要 **Android SDK Platform 36**（compileSdk=36）和 Windows **开发者模式**（Flutter 插件 symlink）。
