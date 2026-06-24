@@ -2263,14 +2263,6 @@ class _AboutPage extends StatelessWidget {
                 const Text(
                   '这是 Eric6286 基于原作者 oastwy 的「鸟瘾闹钟」做的个人自用 fork。在原版基础上去掉了强制认鸟挑战，新增锁屏直接关闹钟、按中国节假日重复、深色模式、闹钟 Live Updates，并修复了锁屏 / 息屏响铃与整夜耗电等问题。',
                 ),
-                const SizedBox(height: 10),
-                Text(
-                  '所有改动仅出于自用需要，与原作者无关，原作者不对这些改动负责。下方「关于我们 / 致谢 / 找到我们」各栏均为原作者的内容，特此保留致谢。',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
                 const SizedBox(height: 8),
                 const _SocialLinkTile(
                   icon: Icons.code,
