@@ -921,57 +921,18 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   Future<void> _showSettings() async {
-    final controller = TextEditingController(text: _apiKeyController.text);
-    final saved = await showModalBottomSheet<bool>(
+    // 把输入框控制器的生命周期交给弹窗自带 State 的 _SettingsSheet 管理（initState 建、
+    // dispose 释放），避免在这里手动建/dispose 一个绑进 builder 的 controller——后者在弹窗
+    // 关闭后再 dispose 会触发 “_dependents.isEmpty” 断言崩溃。弹窗保存时通过 pop 回传 trim 后的 Key。
+    final result = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              20,
-              16,
-              20,
-              MediaQuery.of(context).viewInsets.bottom + 20,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('设置', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: controller,
-                  decoration: const InputDecoration(
-                    labelText: 'xeno-canto API Key',
-                    prefixIcon: Icon(Icons.key_outlined),
-                    helperText: '没有 Key 也可用，但请求次数有限制',
-                    helperMaxLines: 2,
-                  ),
-                  obscureText: true,
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '前往 xeno-canto.org 注册账户，在个人页面获取免费 API Key，填入后可提升搜索请求额度。',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                  onPressed: () => Navigator.of(context).pop(true),
-                  icon: const Icon(Icons.check),
-                  label: const Text('保存'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      builder: (context) => _SettingsSheet(initialApiKey: _apiKeyController.text),
     );
-    if (saved == true) {
-      _apiKeyController.text = controller.text.trim();
+    if (result != null) {
+      _apiKeyController.text = result;
       await _save();
     }
-    controller.dispose();
   }
 
   @override
@@ -1419,6 +1380,76 @@ Future<TimeOfDay?> _showCupertinoTimePicker(
       );
     },
   );
+}
+
+// 设置弹窗：自带 State，独立持有并释放 API Key 输入框控制器，保存时 pop 回传 trim 后的 Key。
+class _SettingsSheet extends StatefulWidget {
+  final String initialApiKey;
+
+  const _SettingsSheet({required this.initialApiKey});
+
+  @override
+  State<_SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<_SettingsSheet> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialApiKey);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          20,
+          16,
+          20,
+          MediaQuery.of(context).viewInsets.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('设置', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _controller,
+              decoration: const InputDecoration(
+                labelText: 'xeno-canto API Key',
+                prefixIcon: Icon(Icons.key_outlined),
+                helperText: '没有 Key 也可用，但请求次数有限制',
+                helperMaxLines: 2,
+              ),
+              obscureText: true,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '前往 xeno-canto.org 注册账户，在个人页面获取免费 API Key，填入后可提升搜索请求额度。',
+              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () =>
+                  Navigator.of(context).pop(_controller.text.trim()),
+              icon: const Icon(Icons.check),
+              label: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _BirdTimePanel extends StatelessWidget {
