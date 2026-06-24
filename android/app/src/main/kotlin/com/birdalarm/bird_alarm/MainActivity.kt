@@ -27,6 +27,8 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.min
 
@@ -34,6 +36,10 @@ class MainActivity : FlutterActivity() {
     private val channelName = "bird_alarm/system_alarm"
     private var launchedByAlarm = false
     private var channel: MethodChannel? = null
+    // 音频转码很耗时，放后台线程跑，避免阻塞平台主线程导致下载时 UI 卡死。
+    private val transcodeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    @Volatile private var isDestroyed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         launchedByAlarm = intent?.getBooleanExtra("launch_alarm", false) == true ||
@@ -99,10 +105,29 @@ class MainActivity : FlutterActivity() {
                     if (inputPath == null || outputPath == null) {
                         result.error("missing_path", "inputPath and outputPath are required", null)
                     } else {
-                        try {
-                            result.success(transcodeAudio(inputPath, outputPath, gain.toFloat()))
-                        } catch (error: Exception) {
-                            result.error("transcode_failed", error.message, null)
+                        // 在后台线程转码，完成后切回主线程返回结果；result 只回调一次，
+                        // 且用 isDestroyed 守卫，避免转码途中 Activity 销毁时回调到失效引擎崩溃。
+                        transcodeExecutor.execute {
+                            try {
+                                val output = transcodeAudio(inputPath, outputPath, gain.toFloat())
+                                mainHandler.post {
+                                    if (!isDestroyed) {
+                                        try {
+                                            result.success(output)
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                }
+                            } catch (error: Exception) {
+                                mainHandler.post {
+                                    if (!isDestroyed) {
+                                        try {
+                                            result.error("transcode_failed", error.message, null)
+                                        } catch (_: Exception) {
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -122,6 +147,12 @@ class MainActivity : FlutterActivity() {
             prepareAlarmWindow()
             notifyFlutterAlarmSoon()
         }
+    }
+
+    override fun onDestroy() {
+        isDestroyed = true
+        transcodeExecutor.shutdown()
+        super.onDestroy()
     }
 
     private fun scheduleAlarm(triggerAtMillis: Long) {
