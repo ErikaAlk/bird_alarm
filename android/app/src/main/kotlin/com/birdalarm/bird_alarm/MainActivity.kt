@@ -78,6 +78,10 @@ class MainActivity : FlutterActivity() {
                     prepareAlarmWindow()
                     result.success(null)
                 }
+                "releaseAlarmWindow" -> {
+                    releaseAlarmWindow()
+                    result.success(null)
+                }
                 "requestAlarmPermissions" -> {
                     requestAlarmPermissions()
                     result.success(null)
@@ -254,6 +258,22 @@ class MainActivity : FlutterActivity() {
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
         )
+    }
+
+    // 响铃关闭/退后台后释放「屏幕常亮」标志，让屏幕恢复正常熄屏。这是省电关键：
+    // FLAG_KEEP_SCREEN_ON 一旦设上、配合 showWhenLocked，会让本应用一直亮屏到天亮
+    // （实测整夜亮屏 ≈ 整晚）。这里只清这两个 window flag，绝不调用
+    // setShowWhenLocked(false)/setTurnScreenOn(false)——那是锁屏全屏响铃的命脉，清了会让
+    // 下一次响铃从后台 startActivity 被 BAL 拦截、全屏弹不出来。
+    // 若原生此刻仍在响铃（ringing_asset 还在），跳过释放，避免和新一轮响铃抢标志。
+    private fun releaseAlarmWindow() {
+        if (getRingingAsset() != null) return
+        runOnUiThread {
+            window.clearFlags(
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                    WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
+            )
+        }
     }
 
     private fun requestAlarmPermissions() {

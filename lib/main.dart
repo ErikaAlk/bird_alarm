@@ -213,6 +213,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   Map<String, BirdName> _nameIndex = const {};
   Set<String> _downloadingIds = const {};
   Timer? _ticker;
+  AppLifecycleState? _lifecycleState;
   DateTime? _lastTriggeredMinute;
   ActiveAlarm? _activeAlarm;
   DateTime _now = DateTime.now();
@@ -320,10 +321,26 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       _requestAlarmPermissions();
     }
     _load();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() => _now = DateTime.now());
-      _checkAlarms();
-    });
+    _reconcileTicker();
+  }
+
+  // 每秒计时器（setState 重建整页 + 轮询）只在「正在响铃」或「App 在前台」时跑，退后台
+  // 熄屏即停，避免整夜每秒空耗电。绝不在 inactive 停——锁屏遮挡下的前台会上报 inactive，
+  // 那时响铃遮罩可能正显示、需继续轮询自动关。
+  void _reconcileTicker() {
+    final shouldRun = _activeAlarm != null ||
+        _lifecycleState == null ||
+        _lifecycleState == AppLifecycleState.resumed ||
+        _lifecycleState == AppLifecycleState.inactive;
+    if (shouldRun) {
+      _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) {
+        setState(() => _now = DateTime.now());
+        _checkAlarms();
+      });
+    } else {
+      _ticker?.cancel();
+      _ticker = null;
+    }
   }
 
   @override
@@ -339,9 +356,16 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycleState = state;
     if (state == AppLifecycleState.resumed) {
       _handleAlarmLaunch();
     }
+    // 退到后台/熄屏时释放「屏幕常亮」标志（省电关键），并按生命周期重置计时器。
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _releaseAlarmWindow();
+    }
+    _reconcileTicker();
   }
 
   Future<void> _load() async {
@@ -497,6 +521,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       _previewingSoundId = null;
       _activeAlarm = ActiveAlarm(alarm: alarm, sound: sound, options: options);
     });
+    // 原生可能在 App 退后台时拉起响铃，确保计时器恢复以便遮罩自动收尾。
+    _reconcileTicker();
     if (!useNativeAudio) {
       await _playSound(sound);
     }
@@ -508,6 +534,17 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       await _systemAlarmChannel.invokeMethod<void>('prepareAlarmWindow');
     } catch (_) {
       // The alarm can still ring if the platform window flags are unavailable.
+    }
+  }
+
+  // 响铃收尾（关闭/退后台）后释放「屏幕常亮」标志，让屏幕恢复正常熄屏（省电关键）。
+  // 原生侧只清 FLAG_KEEP_SCREEN_ON，绝不动 showWhenLocked/turnScreenOn。
+  Future<void> _releaseAlarmWindow() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _systemAlarmChannel.invokeMethod<void>('releaseAlarmWindow');
+    } catch (_) {
+      // 平台窗口标志不可用时忽略。
     }
   }
 
@@ -638,6 +675,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       _previewingSoundId = null;
     });
     await _syncSystemAlarm();
+    await _releaseAlarmWindow();
+    _reconcileTicker();
   }
 
   Future<void> _stopNativeAlarmSound() async {
