@@ -21,7 +21,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 return
             }
             ACTION_CANCEL_UPCOMING -> {
-                cancelUpcoming(context)
+                cancelUpcoming(context, intent.getLongExtra(EXTRA_TRIGGER_AT, 0L))
                 return
             }
         }
@@ -94,7 +94,8 @@ class AlarmReceiver : BroadcastReceiver() {
 
     private fun cancelThisAlarmRound(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        listOf(1001, 1004).forEach { requestCode ->
+        // 含贪睡再排的 1005：本轮重新响起时，作废上一轮可能还挂着的贪睡。
+        listOf(1001, 1004, AlarmSoundService.SNOOZE_REQUEST_CODE).forEach { requestCode ->
             alarmManager.cancel(
                 PendingIntent.getBroadcast(
                     context,
@@ -104,20 +105,6 @@ class AlarmReceiver : BroadcastReceiver() {
                 )
             )
         }
-        alarmManager.cancel(
-            PendingIntent.getActivity(
-                context,
-                1001,
-                Intent(context, AlarmRingActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                    putExtra("launch_alarm", true)
-                },
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        )
     }
 
     companion object {
@@ -161,7 +148,9 @@ class AlarmReceiver : BroadcastReceiver() {
             val cancelIntent = PendingIntent.getBroadcast(
                 context,
                 CANCEL_REQUEST_CODE,
-                Intent(context, AlarmReceiver::class.java).setAction(ACTION_CANCEL_UPCOMING),
+                Intent(context, AlarmReceiver::class.java)
+                    .setAction(ACTION_CANCEL_UPCOMING)
+                    .putExtra(EXTRA_TRIGGER_AT, triggerAt),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
@@ -194,9 +183,11 @@ class AlarmReceiver : BroadcastReceiver() {
         }
 
         // 用户在倒计时通知里点「关闭闹钟」：取消本轮即将到来的响铃，并清掉相关通知/服务。
-        fun cancelUpcoming(context: Context) {
+        // skipTriggerAt = 这一次被跳过的触发时刻；记到 prefs，Flutter 重排时跳过它，避免「关了又被排回来」。
+        fun cancelUpcoming(context: Context, skipTriggerAt: Long) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            listOf(1001, 1004).forEach { requestCode ->
+            // 含贪睡再排的 1005，确保连带挂着的贪睡也一起取消。
+            listOf(1001, 1004, AlarmSoundService.SNOOZE_REQUEST_CODE).forEach { requestCode ->
                 alarmManager.cancel(
                     PendingIntent.getBroadcast(
                         context,
@@ -206,20 +197,6 @@ class AlarmReceiver : BroadcastReceiver() {
                     )
                 )
             }
-            alarmManager.cancel(
-                PendingIntent.getActivity(
-                    context,
-                    1001,
-                    Intent(context, AlarmRingActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                        putExtra("launch_alarm", true)
-                    },
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            )
             try {
                 context.stopService(Intent(context, AlarmSoundService::class.java))
             } catch (_: Exception) {
@@ -233,6 +210,7 @@ class AlarmReceiver : BroadcastReceiver() {
             context.getSharedPreferences("bird_alarm_native", Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean("launch_alarm", false)
+                .putLong("skip_trigger_at", skipTriggerAt)
                 .apply()
         }
 

@@ -41,22 +41,23 @@ object NativeAlarmPlayer {
             AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
         )
 
-        player = MediaPlayer().apply {
-            setAudioAttributes(
+        val mediaPlayer = MediaPlayer()
+        try {
+            mediaPlayer.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .build()
             )
-            isLooping = true
+            mediaPlayer.isLooping = true
             try {
                 val localFile = File(assetPath)
                 if (assetPath.startsWith("/") && localFile.exists()) {
                     // 下载到本机的鸟鸣是普通文件，按文件路径直接播放。
-                    setDataSource(localFile.absolutePath)
+                    mediaPlayer.setDataSource(localFile.absolutePath)
                 } else {
                     val descriptor = appContext.assets.openFd(assetPath)
-                    setDataSource(
+                    mediaPlayer.setDataSource(
                         descriptor.fileDescriptor,
                         descriptor.startOffset,
                         descriptor.length
@@ -69,16 +70,32 @@ object NativeAlarmPlayer {
                     appContext.assets.open(assetPath).use { input ->
                         file.outputStream().use { output -> input.copyTo(output) }
                     }
-                    setDataSource(file.absolutePath)
+                    mediaPlayer.setDataSource(file.absolutePath)
                 } catch (_: Exception) {
                     val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
                         ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                    setDataSource(appContext, uri)
+                        ?: throw IllegalStateException("no playable alarm source")
+                    mediaPlayer.setDataSource(appContext, uri)
                 }
             }
-            setVolume(1f, 1f)
-            prepare()
-            start()
+            mediaPlayer.setVolume(1f, 1f)
+            mediaPlayer.prepare()
+            mediaPlayer.start()
+            player = mediaPlayer
+        } catch (_: Exception) {
+            // 播放彻底失败（资源/缓存/默认铃声都不可用，或 prepare/start 抛错）：释放并清掉本轮状态。
+            // 关键：prepare()/start() 由 AlarmReceiver.onReceive 无包裹调用，这里若不吞掉异常会让
+            // 广播接收器抛错崩进程；同时清掉 ringing_asset，避免 isAlarmRinging 谎报「仍在响」。
+            try {
+                mediaPlayer.release()
+            } catch (_: Exception) {
+            }
+            player = null
+            appContext
+                .getSharedPreferences("bird_alarm_native", Context.MODE_PRIVATE)
+                .edit()
+                .remove("ringing_asset")
+                .apply()
         }
     }
 

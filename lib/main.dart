@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -237,7 +238,10 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
   DateTime? _lastTriggeredMinute;
   ActiveAlarm? _activeAlarm;
-  DateTime _now = DateTime.now();
+  // 每秒走时的时钟只驱动报时卡片里的时间文字（ValueListenableBuilder），不再每秒 setState 重建整页。
+  final ValueNotifier<DateTime> _clock = ValueNotifier(DateTime.now());
+  // 被「倒计时通知 → 关闭闹钟」跳过的那一次触发时刻（毫秒，原生写入）；0 表示无。重排时跳过它。
+  int _skipTriggerMs = 0;
   String? _previewingSoundId;
   bool _loaded = false;
   bool _checkingAlarmLaunch = false;
@@ -349,7 +353,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   void _tick(Timer _) {
-    setState(() => _now = DateTime.now());
+    // 只更新时钟（局部重建报时卡片的时间文字），不再每秒 setState 重建整页 + 重跑鸟名过滤。
+    _clock.value = DateTime.now();
     _checkAlarms();
     _dismissOverlayIfNativeStopped();
   }
@@ -389,6 +394,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
+    _clock.dispose();
     _queryController.dispose();
     _speciesSearchController.dispose();
     _apiKeyController.dispose();
@@ -400,8 +406,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     final prefs = await SharedPreferences.getInstance();
     final alarmRaw = prefs.getString(_alarmsKey);
     final libraryRaw = prefs.getString(_libraryKey);
-    await _loadNameIndex();
-    await ChinaHolidayData.loadCache();
+    // 两个独立的 I/O：鸟名表(bundle)与节假日缓存(prefs)并行加载，缩短冷启动首帧时间。
+    await Future.wait([_loadNameIndex(), ChinaHolidayData.loadCache()]);
     _apiKeyController.text =
         prefs.getString(_xenoApiKeyKey) ?? _apiKeyController.text;
     setState(() {
@@ -442,13 +448,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 
   Future<void> _handleAlarmLaunch() async {
     if (!_loaded || _checkingAlarmLaunch || _activeAlarm != null) return;
-    // 刚关过本轮闹钟的几秒内，吞掉迟到的 alarmFired/resumed：此时原生 ringing_asset 已清，
-    // 若继续消费会拿到 assetPath=null → 随机选鸟弹出第二个响铃遮罩。
-    final dismissedAt = _lastDismissedAt;
-    if (dismissedAt != null &&
-        DateTime.now().difference(dismissedAt) < const Duration(seconds: 5)) {
-      return;
-    }
     _checkingAlarmLaunch = true;
     try {
       final launch =
@@ -457,8 +456,17 @@ class _AlarmHomePageState extends State<AlarmHomePage>
           ) ??
           const {};
       if (launch['launched'] == true) {
+        final assetPath = launch['assetPath'] as String?;
+        // 刚关过本轮闹钟的几秒内，只吞掉「迟到且无鸟」(assetPath==null：原生 ringing_asset 已被
+        // 关闭清掉)的重复触发，避免随机选鸟弹出第二个遮罩；真正该响的新一轮会带原生刚选定的
+        // assetPath，不会被误吞——这样同分钟的第二个闹钟也能正常弹遮罩。
+        final dismissedAt = _lastDismissedAt;
+        final justDismissed =
+            dismissedAt != null &&
+            DateTime.now().difference(dismissedAt) < const Duration(seconds: 5);
+        if (assetPath == null && justDismissed) return;
         await _ringNextEnabledAlarm(
-          assetPath: launch['assetPath'] as String?,
+          assetPath: assetPath,
           useNativeAudio: true,
         );
       }
@@ -567,18 +575,29 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     }
   }
 
-  Future<void> _dismissAlarm() async {
-    if (_activeAlarm == null) return;
+  // 三条收尾路径（app 内关闭 / 通知关闭后自动收起 / 贪睡）的共用尾巴：停播放器、（可选）执行一个
+  // 原生动作、收起遮罩、释放屏幕常亮、重置计时器、（可选）重排系统闹钟。每个 await 后都带 mounted 守卫。
+  Future<void> _teardownOverlay({
+    Future<void> Function()? nativeAction,
+    bool resync = true,
+  }) async {
     _lastDismissedAt = DateTime.now();
     await _player.stop();
-    await _stopNativeAlarmSound();
+    if (nativeAction != null) await nativeAction();
+    if (!mounted) return;
     setState(() {
       _activeAlarm = null;
       _previewingSoundId = null;
     });
     await _releaseAlarmWindow();
+    if (!mounted) return;
     _reconcileTicker();
-    await _syncSystemAlarm();
+    if (resync) await _syncSystemAlarm();
+  }
+
+  Future<void> _dismissAlarm() async {
+    if (_activeAlarm == null) return;
+    await _teardownOverlay(nativeAction: _stopNativeAlarmSound);
   }
 
   // 响铃遮罩显示期间，若铃声是从「通知」的关闭/贪睡键停掉的（原生引擎已停、ringing_asset
@@ -595,35 +614,26 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       return; // 通道不可用时不误关遮罩。
     }
     if (!stillRinging && _activeAlarm != null) {
-      _lastDismissedAt = DateTime.now();
-      await _player.stop();
-      setState(() {
-        _activeAlarm = null;
-        _previewingSoundId = null;
-      });
-      await _releaseAlarmWindow();
-      _reconcileTicker();
-      await _syncSystemAlarm();
+      // 原生已经停了，这里不必再调 stopAlarmSound。
+      await _teardownOverlay();
     }
   }
 
   Future<void> _snoozeAlarm() async {
     if (_activeAlarm == null) return;
-    _lastDismissedAt = DateTime.now();
-    await _player.stop();
-    if (Platform.isAndroid) {
-      try {
-        await _systemAlarmChannel.invokeMethod<void>('snoozeAlarm');
-      } catch (_) {
-        // 平台通道不可用时忽略。
-      }
-    }
-    setState(() {
-      _activeAlarm = null;
-      _previewingSoundId = null;
-    });
-    await _releaseAlarmWindow();
-    _reconcileTicker();
+    // 贪睡的重排由原生前台服务负责（停当前铃 + N 分钟后重排）；这里特意不 _syncSystemAlarm(resync=false)，
+    // 否则会用「下一次常规发生」覆盖/搅乱原生刚排好的贪睡。
+    await _teardownOverlay(
+      nativeAction: () async {
+        if (!Platform.isAndroid) return;
+        try {
+          await _systemAlarmChannel.invokeMethod<void>('snoozeAlarm');
+        } catch (_) {
+          // 平台通道不可用时忽略。
+        }
+      },
+      resync: false,
+    );
   }
 
   Future<void> _stopNativeAlarmSound() async {
@@ -668,6 +678,16 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 
   Future<void> _syncSystemAlarm() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    // 先取原生记录的「被倒计时通知跳过的那一次触发时刻」，下面排程时跳过它（避免关了又被排回来）。
+    if (Platform.isAndroid) {
+      try {
+        _skipTriggerMs =
+            await _systemAlarmChannel.invokeMethod<int>('getSkippedTrigger') ??
+            0;
+      } catch (_) {
+        _skipTriggerMs = 0;
+      }
+    }
     final next = _nextEnabledAlarmDateTime();
     try {
       if (next == null) {
@@ -1130,7 +1150,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
             index: _selectedTab,
             children: [
               _AlarmTab(
-                now: _now,
+                clock: _clock,
                 nextAlarm: _nextAlarmText(),
                 alarms: _alarms,
                 onEditAlarm: _editAlarm,
@@ -1198,19 +1218,45 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   String _nextAlarmText() {
-    final enabled = _alarms.where((alarm) => alarm.enabled).toList();
-    if (enabled.isEmpty) return '暂无启用闹钟';
-    enabled.sort((a, b) => _minutesUntil(a).compareTo(_minutesUntil(b)));
-    final alarm = enabled.first;
-    final minutes = _minutesUntil(alarm);
-    final dayText = minutes < 24 * 60 ? '今天' : '${(minutes / 1440).floor()} 天后';
-    return '$dayText ${alarm.time.format(context)} · ${alarm.label}';
+    final now = DateTime.now();
+    BirdAlarm? bestAlarm;
+    DateTime? bestAt;
+    for (final alarm in _alarms.where((alarm) => alarm.enabled)) {
+      final at = _nextOccurrence(alarm, from: now);
+      if (at == null) continue;
+      if (bestAt == null || at.isBefore(bestAt)) {
+        bestAt = at;
+        bestAlarm = alarm;
+      }
+    }
+    if (bestAt == null || bestAlarm == null) return '暂无启用闹钟';
+    // 按日历日差算「今天/明天/后天/N 天后」，而不是流逝分钟数（跨午夜会差一天）。
+    final today = DateTime(now.year, now.month, now.day);
+    final thatDay = DateTime(bestAt.year, bestAt.month, bestAt.day);
+    final dayDiff = thatDay.difference(today).inDays;
+    final dayText = switch (dayDiff) {
+      0 => '今天',
+      1 => '明天',
+      2 => '后天',
+      _ => '$dayDiff 天后',
+    };
+    return '$dayText ${bestAlarm.time.format(context)} · ${bestAlarm.label}';
   }
 
   int _minutesUntil(BirdAlarm alarm) {
     final now = DateTime.now();
-    for (var offset = 0; offset < 8; offset++) {
-      final day = now.add(Duration(days: offset));
+    final next = _nextOccurrence(alarm, from: now);
+    return next == null ? 999999 : next.difference(now).inMinutes;
+  }
+
+  // 某个闹钟在 [from, from+366 天) 内的下一次发生时刻；找不到返回 null。
+  // 搜索窗口取一年：足以覆盖「节假日（含周末）」这类相邻匹配可能间隔数日的规则（旧的 8 天窗口
+  // 在「仅法定节假日」语义下会因假日相隔太远而返回 null → 闹钟被静默取消、永不响）。
+  // 同时跳过被「倒计时通知 → 关闭闹钟」标记的那一次发生（_skipTriggerMs）。
+  DateTime? _nextOccurrence(BirdAlarm alarm, {DateTime? from}) {
+    final base = from ?? DateTime.now();
+    for (var offset = 0; offset < 366; offset++) {
+      final day = base.add(Duration(days: offset));
       if (!_alarmRunsOnDate(alarm, day)) continue;
       final candidate = DateTime(
         day.year,
@@ -1219,31 +1265,23 @@ class _AlarmHomePageState extends State<AlarmHomePage>
         alarm.time.hour,
         alarm.time.minute,
       );
-      if (candidate.isAfter(now)) return candidate.difference(now).inMinutes;
+      if (!candidate.isAfter(base)) continue;
+      if (_skipTriggerMs != 0 &&
+          candidate.millisecondsSinceEpoch == _skipTriggerMs) {
+        continue; // 这一次被「倒计时通知 → 关闭闹钟」跳过，看下一次。
+      }
+      return candidate;
     }
-    return 999999;
+    return null;
   }
 
   DateTime? _nextEnabledAlarmDateTime() {
-    final enabled = _alarms.where((alarm) => alarm.enabled).toList();
-    if (enabled.isEmpty) return null;
     final now = DateTime.now();
     DateTime? best;
-    for (final alarm in enabled) {
-      for (var offset = 0; offset < 8; offset++) {
-        final day = now.add(Duration(days: offset));
-        if (!_alarmRunsOnDate(alarm, day)) continue;
-        final candidate = DateTime(
-          day.year,
-          day.month,
-          day.day,
-          alarm.time.hour,
-          alarm.time.minute,
-        );
-        if (!candidate.isAfter(now)) continue;
-        if (best == null || candidate.isBefore(best)) best = candidate;
-        break;
-      }
+    for (final alarm in _alarms.where((alarm) => alarm.enabled)) {
+      final candidate = _nextOccurrence(alarm, from: now);
+      if (candidate == null) continue;
+      if (best == null || candidate.isBefore(best)) best = candidate;
     }
     return best;
   }
@@ -1253,7 +1291,8 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       case RepeatRule.chinaWorkdays:
         return ChinaWorkdayCalendar.isWorkday(date);
       case RepeatRule.chinaHolidays:
-        return ChinaWorkdayCalendar.isHoliday(date);
+        // 休息日：法定节假日 + 正常放假的周末；调休补班日与普通工作日不响。
+        return !ChinaWorkdayCalendar.isWorkday(date);
       case RepeatRule.weekdays:
         return alarm.repeatDays.isEmpty ||
             alarm.repeatDays.contains(date.weekday);
@@ -1262,7 +1301,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 }
 
 class _AlarmTab extends StatelessWidget {
-  final DateTime now;
+  final ValueListenable<DateTime> clock;
   final String nextAlarm;
   final List<BirdAlarm> alarms;
   final ValueChanged<BirdAlarm> onEditAlarm;
@@ -1271,7 +1310,7 @@ class _AlarmTab extends StatelessWidget {
   onAlarmEnabledChanged;
 
   const _AlarmTab({
-    required this.now,
+    required this.clock,
     required this.nextAlarm,
     required this.alarms,
     required this.onEditAlarm,
@@ -1284,7 +1323,7 @@ class _AlarmTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
       children: [
-        _BirdTimePanel(now: now, nextAlarm: nextAlarm),
+        _BirdTimePanel(clock: clock, nextAlarm: nextAlarm),
         const SizedBox(height: 16),
         Text('闹钟', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 8),
@@ -1418,8 +1457,8 @@ class _AlarmEditorState extends State<AlarmEditor> {
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
                   _rule == RepeatRule.chinaWorkdays
-                      ? '仅工作日响铃：跳过 2026 法定节假日，包含调休补班日。'
-                      : '仅法定节假日响铃：只在 2026 放假日响铃（不含调休补班日）。',
+                      ? '仅工作日响铃：周末与法定节假日不响，含调休补班日。'
+                      : '休息日响铃：周末和法定节假日都响，调休补班日不响。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1513,15 +1552,13 @@ Future<TimeOfDay?> _showCupertinoTimePicker(
 }
 
 class _BirdTimePanel extends StatelessWidget {
-  final DateTime now;
+  final ValueListenable<DateTime> clock;
   final String nextAlarm;
 
-  const _BirdTimePanel({required this.now, required this.nextAlarm});
+  const _BirdTimePanel({required this.clock, required this.nextAlarm});
 
   @override
   Widget build(BuildContext context) {
-    final timeText =
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: Container(
@@ -1545,9 +1582,17 @@ class _BirdTimePanel extends StatelessWidget {
                     height: compact ? 160 : 190,
                     child: CustomPaint(painter: _CartoonClockBirdPainter()),
                   );
-                  final copy = _BirdSpeechPanel(
-                    timeText: timeText,
-                    nextAlarm: nextAlarm,
+                  // 只让时间文字随时钟每秒重建，外面的渐变 / 卡通鸟 / 天空图案不重绘。
+                  final copy = ValueListenableBuilder<DateTime>(
+                    valueListenable: clock,
+                    builder: (context, now, _) {
+                      final timeText =
+                          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+                      return _BirdSpeechPanel(
+                        timeText: timeText,
+                        nextAlarm: nextAlarm,
+                      );
+                    },
                   );
                   if (compact) {
                     return Column(
@@ -2197,7 +2242,7 @@ class _AboutPage extends StatelessWidget {
   const _AboutPage();
 
   // 关于页展示的版本号——发版时与 pubspec.yaml 的 version 同步更新。
-  static const _appVersion = 'v1.2.0';
+  static const _appVersion = 'v1.3.0';
 
   @override
   Widget build(BuildContext context) {
@@ -2261,7 +2306,7 @@ class _AboutPage extends StatelessWidget {
                 Text('当前版本：$_appVersion'),
                 const SizedBox(height: 10),
                 const Text(
-                  '这是 ErikaAlk 基于原作者 oastwy 的「鸟瘾闹钟」做的个人自用 fork。在原版基础上去掉了强制认鸟挑战，新增锁屏直接关闹钟、按中国节假日重复、深色模式、闹钟 Live Updates，并修复了锁屏 / 息屏响铃与整夜耗电等问题。',
+                  '这是 ErikaAlk 基于原作者 oastwy 的「鸟瘾闹钟」做的个人自用 fork。在原版基础上去掉了强制认鸟挑战，新增锁屏直接关闹钟、按中国工作日 / 休息日（含周末）重复、深色模式、闹钟 Live Updates，并修复了锁屏 / 息屏响铃与整夜耗电等问题。',
                 ),
                 const SizedBox(height: 8),
                 const _SocialLinkTile(
@@ -2577,7 +2622,7 @@ String _repeatText(BirdAlarm alarm) {
     case RepeatRule.chinaWorkdays:
       return '中国工作日';
     case RepeatRule.chinaHolidays:
-      return '中国法定节假日';
+      return '休息日';
     case RepeatRule.weekdays:
       final days = alarm.repeatDays;
       if (days.isEmpty) return '仅一次';
@@ -2654,10 +2699,13 @@ class ChinaHolidayData {
       var any = false;
       for (final value in holiday.values) {
         if (value is Map) {
-          final date = value['date'] as String?;
-          final isOff = value['holiday'] as bool?;
-          if (date != null && isOff != null) {
-            _offDays[date] = isOff;
+          final date = value['date']?.toString();
+          if (date != null && date.isNotEmpty) {
+            // 宽松解析：holiday 字段可能是 bool，也可能因接口变动成数字/字符串；
+            // 一律按「是否为 true / 1 / 'true'」判定，避免 as bool? 抛错丢掉整年数据。
+            final raw = value['holiday'];
+            _offDays[date] =
+                raw == true || raw == 1 || raw.toString() == 'true';
             any = true;
           }
         }
@@ -2719,11 +2767,6 @@ class ChinaWorkdayCalendar {
     final off = _offDayOverride(_dateKey(date));
     if (off != null) return !off;
     return date.weekday >= DateTime.monday && date.weekday <= DateTime.friday;
-  }
-
-  // 是否为中国法定节假日（放假日）。调休补班日不算节假日。
-  static bool isHoliday(DateTime date) {
-    return _offDayOverride(_dateKey(date)) ?? false;
   }
 
   // 该日期是否放假：true=放假, false=调休补班, null=普通日（按周一~周五判断）。

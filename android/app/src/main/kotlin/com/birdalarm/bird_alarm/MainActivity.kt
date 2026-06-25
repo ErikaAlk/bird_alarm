@@ -41,7 +41,7 @@ class MainActivity : FlutterActivity() {
     // 音频转码很耗时，放后台线程跑，避免阻塞平台主线程导致 UI 卡死。
     private val transcodeExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
-    @Volatile private var isDestroyed = false
+    @Volatile private var engineDestroyed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         launchedByAlarm = intent?.getBooleanExtra("launch_alarm", false) == true ||
@@ -111,6 +111,11 @@ class MainActivity : FlutterActivity() {
                     snoozeAlarm()
                     result.success(null)
                 }
+                "getSkippedTrigger" -> {
+                    // 用户在倒计时通知里点「关闭闹钟」时，原生写入被跳过那一次的触发时刻。
+                    // Flutter 重排闹钟时据此跳过这一次发生，避免「关了又被重排回来」。
+                    result.success(getSkippedTrigger())
+                }
                 "testSystemAlarm" -> {
                     clearScheduledSystemAlarms()
                     clearPendingAlarmLaunch()
@@ -125,12 +130,12 @@ class MainActivity : FlutterActivity() {
                         result.error("missing_path", "inputPath and outputPath are required", null)
                     } else {
                         // 在后台线程转码，完成后切回主线程返回结果；result 只回调一次，
-                        // 且用 isDestroyed 守卫，避免转码途中 Activity 销毁时回调到失效引擎崩溃。
+                        // 且用 engineDestroyed 守卫，避免转码途中 Activity 销毁时回调到失效引擎崩溃。
                         transcodeExecutor.execute {
                             try {
                                 val output = transcodeAudio(inputPath, outputPath, gain.toFloat())
                                 mainHandler.post {
-                                    if (!isDestroyed) {
+                                    if (!engineDestroyed) {
                                         try {
                                             result.success(output)
                                         } catch (_: Exception) {
@@ -139,7 +144,7 @@ class MainActivity : FlutterActivity() {
                                 }
                             } catch (error: Exception) {
                                 mainHandler.post {
-                                    if (!isDestroyed) {
+                                    if (!engineDestroyed) {
                                         try {
                                             result.error("transcode_failed", error.message, null)
                                         } catch (_: Exception) {
@@ -169,7 +174,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        isDestroyed = true
+        engineDestroyed = true
         transcodeExecutor.shutdown()
         super.onDestroy()
     }
@@ -247,6 +252,8 @@ class MainActivity : FlutterActivity() {
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
         alarmManager.cancel(alarmBroadcastPendingIntent(1001))
         alarmManager.cancel(alarmBroadcastPendingIntent(1004))
+        // 贪睡再排的闹钟(1005)也要取消：否则贪睡后又在 app 里禁用/删除闹钟，5 分钟后仍会响。
+        alarmManager.cancel(alarmBroadcastPendingIntent(AlarmSoundService.SNOOZE_REQUEST_CODE))
         alarmManager.cancel(alarmActivityPendingIntent())
         alarmManager.cancel(preAlarmPendingIntent(0L))
         val notificationManager =
@@ -267,13 +274,13 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // setAlarmClock 的 show-intent：用户点系统状态栏「下一个闹钟」芯片时打开本应用。
+    // 只是「查看/编辑」入口，绝不带 launch_alarm（带了会被当成响铃→放鸟叫+假全屏页）。
     private fun alarmActivityPendingIntent(): PendingIntent {
-        val intent = Intent(this, AlarmRingActivity::class.java).apply {
+        val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-            putExtra("launch_alarm", true)
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         return PendingIntent.getActivity(
             this,
@@ -320,6 +327,12 @@ class MainActivity : FlutterActivity() {
         return getSharedPreferences("bird_alarm_native", Context.MODE_PRIVATE)
             .getString("ringing_asset", null)
             ?.removePrefix("flutter_assets/assets/")
+    }
+
+    // 被「倒计时通知 → 关闭闹钟」跳过的那一次触发时刻（毫秒）；无则返回 0。
+    private fun getSkippedTrigger(): Long {
+        return getSharedPreferences("bird_alarm_native", Context.MODE_PRIVATE)
+            .getLong("skip_trigger_at", 0L)
     }
 
     // 持久化 Flutter 下发的"可离线播放音库"（含下载的鸟鸣）与"路径→中文名"映射，
