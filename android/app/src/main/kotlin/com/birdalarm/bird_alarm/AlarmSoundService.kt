@@ -121,6 +121,14 @@ class AlarmSoundService : Service() {
             }
         } catch (_: Exception) {
         }
+        // 贪睡期间显示倒计时通知（动态倒计时 +「关闭闹钟」按钮）：既预告「N 分钟后再响」，
+        // 也让用户能提前结束本次贪睡——按钮走 ACTION_CANCEL_UPCOMING → cancelUpcoming，会取消 1005。
+        AlarmReceiver.showCountdownNotification(
+            this,
+            triggerAt,
+            "😴 贪睡中",
+            "稍后再次响铃 · 点「关闭闹钟」可提前结束",
+        )
         val notificationManager =
             getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel(NOTIFICATION_ID)

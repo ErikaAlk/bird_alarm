@@ -97,8 +97,14 @@ class AlarmReceiver : BroadcastReceiver() {
         const val COUNTDOWN_CHANNEL_ID = "bird_alarm_countdown"
         const val PRE_ALARM_LEAD_MILLIS = 10 * 60 * 1000L
 
-        // 响铃前 10 分钟的倒计时通知。Android 16 (API 36) 上请求提级为 Live Update（状态栏胶囊/锁屏/息屏常驻）。
-        fun showCountdownNotification(context: Context, triggerAt: Long) {
+        // 倒计时通知（动态倒计时 + 「关闭闹钟」按钮）。响铃前 10 分钟用它预告；贪睡时也复用它显示
+        // 「N 分钟后再响」并支持提前关。Android 16 (API 36) 上请求提级为 Live Update（状态栏胶囊/锁屏/息屏常驻）。
+        fun showCountdownNotification(
+            context: Context,
+            triggerAt: Long,
+            title: String = "🐦 鸟瘾闹钟即将响起",
+            text: String = "鸟鸣闹钟即将在设定时间响起",
+        ) {
             if (triggerAt <= 0L) return
             val notificationManager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -142,8 +148,8 @@ class AlarmReceiver : BroadcastReceiver() {
                 }
             builder
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
-                .setContentTitle("🐦 鸟瘾闹钟即将响起")
-                .setContentText("鸟鸣闹钟即将在设定时间响起")
+                .setContentTitle(title)
+                .setContentText(text)
                 .setCategory(Notification.CATEGORY_ALARM)
                 .setOngoing(true)
                 .setAutoCancel(false)
