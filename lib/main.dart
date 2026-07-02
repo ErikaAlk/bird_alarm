@@ -521,6 +521,12 @@ class _AlarmHomePageState extends State<AlarmHomePage>
                   sound.assetPath == assetPath || sound.localPath == assetPath,
               orElse: () => _library[_random.nextInt(_library.length)],
             );
+    // 遮罩渲染在首页路由的 Stack 里，若此刻有 bottom sheet（新建/编辑、设置、时间选择）
+    // 压在 Navigator 上层，遮罩会被弹窗和 ModalBarrier 盖住、按钮点不到；先收掉上层路由。
+    // 三处 bottom sheet 调用方都对 null 返回值提前 return，直接 pop 是安全的。
+    if (mounted) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
     await _prepareAlarmWindow();
     setState(() {
       _previewingSoundId = null;
@@ -2262,7 +2268,7 @@ class _AboutPage extends StatelessWidget {
   const _AboutPage();
 
   // 关于页展示的版本号——发版时与 pubspec.yaml 的 version 同步更新。
-  static const _appVersion = 'v1.3.2';
+  static const _appVersion = 'v1.3.3';
 
   @override
   Widget build(BuildContext context) {
