@@ -44,7 +44,9 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-# 本地开发辅助脚本与方案文档（仅个人本地使用，不纳入版本控制）
+# 本地开发辅助脚本、个人配置与方案文档（仅个人本地使用，不纳入版本控制）
 /install.ps1
 /install.bat
+/release.ps1
 /鸟瘾闹钟-修复方案.html
+/.claude/settings.local.json

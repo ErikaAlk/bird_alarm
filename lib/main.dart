@@ -412,11 +412,10 @@ class _AlarmHomePageState extends State<AlarmHomePage>
         prefs.getString(_xenoApiKeyKey) ?? _apiKeyController.text;
     setState(() {
       if (alarmRaw != null) {
-        _alarms = _sortByTime(
-          (jsonDecode(alarmRaw) as List<dynamic>)
-              .map((item) => BirdAlarm.fromJson(item as Map<String, dynamic>))
-              .toList(),
-        );
+        _alarms =
+            (jsonDecode(alarmRaw) as List<dynamic>)
+                .map((item) => BirdAlarm.fromJson(item as Map<String, dynamic>))
+                .toList();
       } else {
         _alarms = [
           BirdAlarm(
@@ -668,11 +667,13 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     }
   }
 
-  /// 按响铃时间（时:分）升序排列；时间相同按 id（创建先后）保持稳定顺序。
+  /// 按响铃时间（时:分）升序排列；时间相同按 id 兜底保证顺序稳定
+  /// （id 是等长的微秒时间戳字符串，字典序即创建先后）。
+  /// 只在闹钟列表的渲染处调用——一处排序覆盖所有修改 _alarms 的路径，
+  /// 各赋值点无须（也不要）自行排序。必须排在拷贝上，不可就地改 _alarms。
   List<BirdAlarm> _sortByTime(List<BirdAlarm> alarms) {
     return [...alarms]..sort((a, b) {
-      final byTime = (a.time.hour * 60 + a.time.minute)
-          .compareTo(b.time.hour * 60 + b.time.minute);
+      final byTime = a.time.compareTo(b.time);
       return byTime != 0 ? byTime : a.id.compareTo(b.id);
     });
   }
@@ -1090,13 +1091,12 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     if (result == null) return;
     setState(() {
       if (existing == null) {
-        _alarms = _sortByTime([..._alarms, result]);
+        _alarms = [..._alarms, result];
       } else {
-        _alarms = _sortByTime(
-          _alarms
-              .map((alarm) => alarm.id == result.id ? result : alarm)
-              .toList(),
-        );
+        _alarms =
+            _alarms
+                .map((alarm) => alarm.id == result.id ? result : alarm)
+                .toList();
       }
     });
     await _save();
@@ -1173,7 +1173,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
               _AlarmTab(
                 clock: _clock,
                 nextAlarm: _nextAlarmText(),
-                alarms: _alarms,
+                alarms: _sortByTime(_alarms),
                 onEditAlarm: _editAlarm,
                 onDeleteAlarm: (alarm) async {
                   setState(() {
