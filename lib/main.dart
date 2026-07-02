@@ -412,10 +412,11 @@ class _AlarmHomePageState extends State<AlarmHomePage>
         prefs.getString(_xenoApiKeyKey) ?? _apiKeyController.text;
     setState(() {
       if (alarmRaw != null) {
-        _alarms =
-            (jsonDecode(alarmRaw) as List<dynamic>)
-                .map((item) => BirdAlarm.fromJson(item as Map<String, dynamic>))
-                .toList();
+        _alarms = _sortByTime(
+          (jsonDecode(alarmRaw) as List<dynamic>)
+              .map((item) => BirdAlarm.fromJson(item as Map<String, dynamic>))
+              .toList(),
+        );
       } else {
         _alarms = [
           BirdAlarm(
@@ -659,6 +660,15 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     } catch (_) {
       _nameIndex = const {};
     }
+  }
+
+  /// 按响铃时间（时:分）升序排列；时间相同按 id（创建先后）保持稳定顺序。
+  List<BirdAlarm> _sortByTime(List<BirdAlarm> alarms) {
+    return [...alarms]..sort((a, b) {
+      final byTime = (a.time.hour * 60 + a.time.minute)
+          .compareTo(b.time.hour * 60 + b.time.minute);
+      return byTime != 0 ? byTime : a.id.compareTo(b.id);
+    });
   }
 
   Future<void> _save() async {
@@ -1074,12 +1084,13 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     if (result == null) return;
     setState(() {
       if (existing == null) {
-        _alarms = [..._alarms, result];
+        _alarms = _sortByTime([..._alarms, result]);
       } else {
-        _alarms =
-            _alarms
-                .map((alarm) => alarm.id == result.id ? result : alarm)
-                .toList();
+        _alarms = _sortByTime(
+          _alarms
+              .map((alarm) => alarm.id == result.id ? result : alarm)
+              .toList(),
+        );
       }
     });
     await _save();
@@ -2251,7 +2262,7 @@ class _AboutPage extends StatelessWidget {
   const _AboutPage();
 
   // 关于页展示的版本号——发版时与 pubspec.yaml 的 version 同步更新。
-  static const _appVersion = 'v1.3.1';
+  static const _appVersion = 'v1.3.2';
 
   @override
   Widget build(BuildContext context) {
