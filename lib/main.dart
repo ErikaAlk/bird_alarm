@@ -2397,6 +2397,9 @@ class _WeekdayPicker extends StatelessWidget {
   }
 }
 
+/// 首页顶部的报时卡。以前是「亮黄渐变 + 一整块白色内卡」，深色模式下等于在黑底上贴一张
+/// 大白纸，夜里很晃眼；而且两层卡片套着、插画占了一半高度，把闹钟列表挤到屏幕下半截。
+/// 现在改成单层卡片：时间是主角，插画缩到右侧，深色模式换夜色渐变 + 浅色文字。
 class _BirdTimePanel extends StatelessWidget {
   final ValueListenable<DateTime> clock;
   final String nextAlarm;
@@ -2405,54 +2408,58 @@ class _BirdTimePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    // 卡片底色是固定渐变（不是主题色），所以卡片里的文字也用固定色——用主题色会在
+    // 某一种模式下糊在底色上看不清（这块以前就踩过）。
+    final onPanel = dark ? const Color(0xFFE9F5F1) : const Color(0xFF164A45);
+    final onPanelMuted =
+        dark ? const Color(0xFF9FC6BE) : const Color(0xFF3C5A54);
     return ClipRRect(
       borderRadius: BorderRadius.circular(24),
       child: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFFFD983), Color(0xFFFFF0C2)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors:
+                dark
+                    ? const [Color(0xFF0F2C29), Color(0xFF1B4741)]
+                    : const [Color(0xFFFFD983), Color(0xFFFFF0C2)],
           ),
         ),
         child: Stack(
           children: [
-            Positioned.fill(child: CustomPaint(painter: _SkyPatternPainter())),
+            Positioned.fill(
+              child: CustomPaint(painter: _SkyPatternPainter(dark: dark)),
+            ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final compact = constraints.maxWidth < 430;
-                  final bird = SizedBox(
-                    width: compact ? 150 : 190,
-                    height: compact ? 160 : 190,
-                    child: CustomPaint(painter: _CartoonClockBirdPainter()),
-                  );
-                  // 只让时间文字随时钟每秒重建，外面的渐变 / 卡通鸟 / 天空图案不重绘。
-                  final copy = ValueListenableBuilder<DateTime>(
-                    valueListenable: clock,
-                    builder: (context, now, _) {
-                      final timeText =
-                          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-                      return _BirdSpeechPanel(
-                        timeText: timeText,
-                        nextAlarm: nextAlarm,
-                      );
-                    },
-                  );
-                  if (compact) {
-                    return Column(
-                      children: [bird, const SizedBox(height: 8), copy],
-                    );
-                  }
-                  return Row(
-                    children: [
-                      bird,
-                      const SizedBox(width: 14),
-                      Expanded(child: copy),
-                    ],
-                  );
-                },
+              padding: const EdgeInsets.fromLTRB(20, 16, 16, 18),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: ValueListenableBuilder<DateTime>(
+                      valueListenable: clock,
+                      // 只有时间文字随时钟每秒重建，渐变 / 插画 / 天空图案不重绘。
+                      builder:
+                          (context, now, _) => _TimeSummary(
+                            now: now,
+                            nextAlarm: nextAlarm,
+                            onPanel: onPanel,
+                            onPanelMuted: onPanelMuted,
+                            dark: dark,
+                          ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 96,
+                    height: 104,
+                    child: CustomPaint(
+                      painter: _CartoonClockBirdPainter(dark: dark),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -2462,78 +2469,79 @@ class _BirdTimePanel extends StatelessWidget {
   }
 }
 
-class _BirdSpeechPanel extends StatelessWidget {
-  final String timeText;
+class _TimeSummary extends StatelessWidget {
+  final DateTime now;
   final String nextAlarm;
+  final Color onPanel;
+  final Color onPanelMuted;
+  final bool dark;
 
-  const _BirdSpeechPanel({required this.timeText, required this.nextAlarm});
+  const _TimeSummary({
+    required this.now,
+    required this.nextAlarm,
+    required this.onPanel,
+    required this.onPanelMuted,
+    required this.dark,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.88),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFF5CAAA0), width: 2),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x1F5F4B25),
-            blurRadius: 18,
-            offset: Offset(0, 8),
+    final timeText =
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          timeText,
+          style: TextStyle(
+            fontSize: 52,
+            height: 1.05,
+            fontWeight: FontWeight.w300,
+            letterSpacing: -1.5,
+            color: onPanel,
+            fontFeatures: const [FontFeature.tabularFigures()],
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.record_voice_over_outlined,
-                color: Color(0xFF164A45),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '报时鸟正在值班',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: const Color(0xFF164A45),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            timeText,
-            style: Theme.of(context).textTheme.displayMedium?.copyWith(
-              color: const Color(0xFF164A45),
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0,
+        ),
+        const SizedBox(height: 2),
+        Text(
+          '${now.month} 月 ${now.day} 日 周${_weekdayLabel(now.weekday)}',
+          style: TextStyle(fontSize: 13, color: onPanelMuted),
+        ),
+        const SizedBox(height: 12),
+        // 「下一次唤醒」用半透明胶囊压在渐变上，不再是一整块白色内卡。
+        Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: dark ? 0.10 : 0.55),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color:
+                  dark
+                      ? Colors.white.withValues(alpha: 0.12)
+                      : const Color(0x805CAAA0),
             ),
           ),
-          const SizedBox(height: 8),
-          Row(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(
-                Icons.alarm_on_outlined,
-                size: 20,
-                color: Color(0xFF164A45),
-              ),
+              Icon(Icons.alarm_on_outlined, size: 18, color: onPanel),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       '下一次唤醒',
-                      style: TextStyle(color: Color(0xFF3C5A54)),
+                      style: TextStyle(fontSize: 11.5, color: onPanelMuted),
                     ),
+                    const SizedBox(height: 1),
                     Text(
                       nextAlarm,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: const Color(0xFF164A45),
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: onPanel,
                       ),
                     ),
                   ],
@@ -2541,16 +2549,23 @@ class _BirdSpeechPanel extends StatelessWidget {
               ),
             ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
+/// 报时卡背景的云与山丘。深色模式下压到几乎看不见的低对比度——原来的亮绿山丘
+/// 在夜色渐变上会变成一条刺眼的亮边。
 class _SkyPatternPainter extends CustomPainter {
+  final bool dark;
+
+  const _SkyPatternPainter({required this.dark});
+
   @override
   void paint(Canvas canvas, Size size) {
-    final cloud = Paint()..color = Colors.white.withValues(alpha: 0.36);
+    final cloud =
+        Paint()..color = Colors.white.withValues(alpha: dark ? 0.05 : 0.36);
     canvas.drawOval(
       Rect.fromCenter(
         center: Offset(size.width * 0.16, size.height * 0.18),
@@ -2567,7 +2582,9 @@ class _SkyPatternPainter extends CustomPainter {
       ),
       cloud,
     );
-    final hill = Paint()..color = const Color(0xFFB8D98B);
+    final hill =
+        Paint()
+          ..color = dark ? const Color(0xFF16413A) : const Color(0xFFB8D98B);
     final path =
         Path()
           ..moveTo(0, size.height)
@@ -2589,10 +2606,17 @@ class _SkyPatternPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _SkyPatternPainter oldDelegate) =>
+      oldDelegate.dark != dark;
 }
 
+/// 卡通报时鸟。深色模式下只换描边色（原来的深棕描边在夜色底上会整个糊掉，
+/// 鸟就没轮廓了）；身体、肚子、喙这些主体色保留，深浅两版都认得出是同一只鸟。
 class _CartoonClockBirdPainter extends CustomPainter {
+  final bool dark;
+
+  const _CartoonClockBirdPainter({this.dark = false});
+
   @override
   void paint(Canvas canvas, Size size) {
     final scale = size.shortestSide / 180;
@@ -2604,7 +2628,7 @@ class _CartoonClockBirdPainter extends CustomPainter {
 
     final outline =
         Paint()
-          ..color = const Color(0xFF3C3324)
+          ..color = dark ? const Color(0xFFE4EFE9) : const Color(0xFF3C3324)
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
@@ -2614,7 +2638,8 @@ class _CartoonClockBirdPainter extends CustomPainter {
     final wing = Paint()..color = const Color(0xFF126D68);
     final beak = Paint()..color = const Color(0xFFFFA13D);
     final blush = Paint()..color = const Color(0xFFFF9BA6);
-    final dark = Paint()..color = const Color(0xFF2B251D);
+    // 眼睛与钟面刻度用的深色点（别叫 dark，会和上面的 dark 字段撞名）。
+    final inkDot = Paint()..color = const Color(0xFF2B251D);
     final branch =
         Paint()
           ..color = const Color(0xFF7B4E2D)
@@ -2657,7 +2682,7 @@ class _CartoonClockBirdPainter extends CustomPainter {
     canvas.drawPath(beakPath, beak);
     canvas.drawPath(beakPath, outline);
 
-    canvas.drawCircle(const Offset(99, 76), 7, dark);
+    canvas.drawCircle(const Offset(99, 76), 7, inkDot);
     canvas.drawCircle(
       const Offset(102, 73),
       2.2,
@@ -2679,7 +2704,7 @@ class _CartoonClockBirdPainter extends CustomPainter {
       Offset(46, 76),
       Offset(25, 55),
     ]) {
-      canvas.drawCircle(point, 2, dark);
+      canvas.drawCircle(point, 2, inkDot);
     }
 
     final notes =
@@ -2698,7 +2723,8 @@ class _CartoonClockBirdPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _CartoonClockBirdPainter oldDelegate) =>
+      oldDelegate.dark != dark;
 }
 
 /// 闹钟卡片：仿 iOS 时钟——超大号时间 + 标签/重复的次要行 + Cupertino 开关，
@@ -3440,7 +3466,12 @@ class _AboutPage extends StatelessWidget {
               SizedBox(
                 width: 96,
                 height: 96,
-                child: CustomPaint(painter: _CartoonClockBirdPainter()),
+                child: CustomPaint(
+                  // 关于页的卡片在深色下也是深色底，插画要跟着换描边色。
+                  painter: _CartoonClockBirdPainter(
+                    dark: Theme.of(context).brightness == Brightness.dark,
+                  ),
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(

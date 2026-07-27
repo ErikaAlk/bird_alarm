@@ -10,7 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Flutter 在 `C:\dev\flutter\bin`（**不一定在 PATH 上**；脚本里用全路径或 `$env:Path += ";C:\dev\flutter\bin"`）。Dart 3.12 / Flutter 3.44。
 - `flutter analyze` —— **Dart 改动的主要自验手段**（不需要 Gradle，秒级返回；改完 Dart 必跑）。
-- `flutter test` / `flutter test test/widget_test.dart` —— 唯一的测试是 `test/widget_test.dart`（首页渲染冒烟测试）。
+- `flutter test` —— `test/widget_test.dart`（首页渲染冒烟 + 星期格尺寸/双击 + 设置页）与 `test/daily_birds_test.dart`（每日一鸟挑选规则）。
+- **想「看一眼」UI 改动**：临时写个 golden 测试把页面渲染成 PNG（`expectLater(find.byType(BirdAlarmApp), matchesGoldenFile('preview/x.png'))` + `flutter test --update-goldens`），再直接看图；比装机快得多，配色/间距/深色适配一看便知。注意测试字体没有中文，**汉字会显示成方块**，只能判断布局与配色，看完把临时文件删掉别提交。
 - `flutter build apk --release --split-per-abi` —— **默认构建方式**（含 Kotlin 的完整构建，能验证原生改动）。**一律用 release，不再用 debug**；按架构拆分，产物 `build\app\outputs\flutter-apk\app-<abi>-release.apk`（arm64-v8a / armeabi-v7a / x86_64）。装机/发版都以此为准。
 - `.\install.ps1` —— 构建 release 拆分包 + adb 覆盖安装 + 启动，**默认装 arm64-v8a**。参数 `-Abi armeabi-v7a|x86_64`（换架构）/ `-NoBuild`（用已有包）/ `-NoLaunch`。pwsh 7 下直接在终端跑即可（`LocalMachine` 执行策略 `RemoteSigned`，本地脚本放行，不再需要旧的 `install.bat` 绕执行策略包装器）。
 
@@ -55,7 +56,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **节假日数据在线获取**：`ChinaHolidayData` 拉 `https://timor.tech/api/holiday/year/{年}`（每项 `date` + `holiday` 布尔），按年缓存、每周刷新，离线回退 `ChinaWorkdayCalendar` 内置的 2026 表。`isWorkday/isHoliday` 优先用在线数据。内置表只到 2026，跨年靠在线。
 - **Live Updates（提级通知）**：用 extra 字符串 `android.requestPromotedOngoing`（不依赖 compileSdk 36 符号），在"即将响铃"倒计时、"正在响铃"和"下载进度"上提级；守护态通知是普通通知、且无关闭键（避免误点）。下载进度额外在 `SDK_INT >= 36` 时调 `setShortCriticalText("42%")` 让状态栏胶囊显示百分比（该符号需 compileSdk 36，已实测能编译）。
 - **Flutter 3.44 编译**：`ThemeData.cardTheme` 用 `CardThemeData`（不是 `CardTheme`）。
-- **深色模式**：`AppSettings.themeMode` 三态（跟随系统 / 浅色 / 深色），在设置页切换；`BirdAlarmApp` 用 `AnimatedBuilder(animation: appSettings)` 包住 `MaterialApp`，`main()` 里先 `await appSettings.load()` 再 `runApp`（否则会先按系统渲染一帧再跳）。报时鸟卡片恒为浅色，其内文字用**固定深色**而非主题色（否则深色下看不清）；卡通鸟/日出渐变插画保留原色。
+- **深色模式**：`AppSettings.themeMode` 三态（跟随系统 / 浅色 / 深色），在设置页切换；`BirdAlarmApp` 用 `AnimatedBuilder(animation: appSettings)` 包住 `MaterialApp`，`main()` 里先 `await appSettings.load()` 再 `runApp`（否则会先按系统渲染一帧再跳）。报时卡（`_BirdTimePanel`）的底色是**固定渐变**而非主题色——浅色是日出黄、深色是夜绿（`#0F2C29→#1B4741`）；正因为底色固定，卡片里的文字/图标也必须用**固定色**（`onPanel`/`onPanelMuted`），用主题色会在某一种模式下糊在底色上看不清。两个 painter（`_SkyPatternPainter`/`_CartoonClockBirdPainter`）都吃 `dark` 参数：深色下山丘压暗、卡通鸟描边换浅色（深棕描边在夜色底上会整个消失）。**别再让这张卡恒为浅色**——那样深色模式下就是黑底上贴一张大白纸，夜里很晃眼。
 - **响铃设置必须落到原生 prefs**：响铃发生在原生侧、那一刻 App 可能没在跑，所以渐响这类设置由 `_syncSoundSettings()` 经 `updateSoundSettings` 写进 `bird_alarm_native`，**不要指望响铃时回头问 Flutter 要**。
 - **双击手势别用 `onDoubleTap`**：`GestureDetector.onDoubleTap` 会让**单击**一直等到双击超时（~300ms）才生效，点一下顿一下。星期格与分段控件都改成自己按时间戳判双击（`_kDoubleTapWindow`），单击零延迟。判「已全选则清空」要用**第一下点击之前**的选择（`_daysBeforeLastTap`），否则全选时永远清不掉。
 - **选中不能改变尺寸**：`SegmentedButton`/`FilterChip` 选中后会多出对勾、把后面的控件挤走。分段控件和星期格都自绘（`_SegmentedPicker` / `_WeekdayPicker`），等宽 + 固定高，选中只换底色与字重；`test/widget_test.dart` 里有守住这条的用例。
