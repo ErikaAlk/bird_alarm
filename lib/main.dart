@@ -215,8 +215,6 @@ ThemeData buildAppTheme(Brightness brightness) {
   );
 }
 
-enum BirdLibraryFilter { all, downloaded, notDownloaded }
-
 /// 闹钟的重复规则：自定义星期 / 中国工作日 / 中国法定节假日。
 enum RepeatRule { weekdays, chinaWorkdays, chinaHolidays }
 
@@ -407,11 +405,10 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   bool _searching = false;
   int _selectedTab = 0;
   final _pageController = PageController();
-  BirdLibraryFilter _libraryFilter = BirdLibraryFilter.all;
   // 下载进度：id → 0~1，null 表示进度未知（转码阶段）。同时驱动 App 内进度条与原生 Live Update 通知。
   Map<String, double?> _downloadProgress = const {};
   // 「每日一鸟 / 今日推荐」按日期定种子，当天固定、隔天自动换。缓存住免得每帧重算。
-  DailyBirdPicks? _dailyPicks;
+  DailyBird? _dailyPicks;
 
   static const _starterLibrary = <BirdSound>[
     BirdSound(
@@ -1341,26 +1338,20 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     }
   }
 
+  /// 鸟种搜索结果。**没输入搜索词就返回空**——以前不搜也列出名录前 30 条，
+  /// 永远是同几只鸵鸟，看着像界面坏了；现在只有搜了才出结果。
   List<BirdName> _filteredBirdNames() {
     final query = _speciesSearchController.text.trim().toLowerCase();
-    final downloaded = _library.map((sound) => sound.sciName).toSet();
+    if (query.isEmpty) return const [];
     return _nameList
-        .where((bird) {
-          final isDownloaded = downloaded.contains(bird.sci);
-          if (_libraryFilter == BirdLibraryFilter.downloaded && !isDownloaded) {
-            return false;
-          }
-          if (_libraryFilter == BirdLibraryFilter.notDownloaded &&
-              isDownloaded) {
-            return false;
-          }
-          if (query.isEmpty) return true;
-          return bird.display.toLowerCase().contains(query) ||
+        .where(
+          (bird) =>
+              bird.display.toLowerCase().contains(query) ||
               bird.cn.toLowerCase().contains(query) ||
               bird.en.toLowerCase().contains(query) ||
-              bird.sci.toLowerCase().contains(query);
-        })
-        .take(80)
+              bird.sci.toLowerCase().contains(query),
+        )
+        .take(30)
         .toList();
   }
 
@@ -1396,27 +1387,17 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     await _save();
   }
 
-  /// 「每日一鸟 / 今日推荐」：当天算一次就缓存起来，隔天自动重算。
-  /// 缓存按「日期」失效、不跟着音库变——这样当天下完推荐里的某只鸟，它仍留在列表里显示
-  /// 已下载，而不是当场消失。挑选逻辑见纯函数 [pickDailyBirds]。
-  DailyBirdPicks _dailyBirdPicks() {
+  /// 「每日一鸟」：当天算一次就缓存起来，隔天自动重算。挑选逻辑见纯函数 [pickDailyBird]。
+  DailyBird _dailyBird() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final cached = _dailyPicks;
     if (cached != null && cached.day == today) return cached;
-    final picks = pickDailyBirds(
-      names: _nameList,
-      downloadedSci:
-          _library
-              .map((sound) => sound.sciName)
-              .where((sci) => sci.isNotEmpty)
-              .toSet(),
-      day: today,
-    );
+    final picked = pickDailyBird(names: _nameList, day: today);
     // day == null 表示鸟名表还没加载完，这种空结果不能缓存，否则今天剩下的时间里
     // 每日一鸟一直是空的（缓存是按日期失效的）。
-    if (picks.day != null) _dailyPicks = picks;
-    return picks;
+    if (picked.day != null) _dailyPicks = picked;
+    return picked;
   }
 
   @override
@@ -1466,10 +1447,9 @@ class _AlarmHomePageState extends State<AlarmHomePage>
                     child: _LibraryPanel(
                       library: _library,
                       species: _filteredBirdNames(),
-                      daily: _dailyBirdPicks(),
+                      daily: _dailyBird(),
                       controller: _queryController,
                       speciesSearchController: _speciesSearchController,
-                      filter: _libraryFilter,
                       searching: _searching,
                       downloadingIds: _downloadingIds,
                       downloadProgress: _downloadProgress,
@@ -1478,8 +1458,6 @@ class _AlarmHomePageState extends State<AlarmHomePage>
                       onUpload: _pickLocalAudio,
                       onSearch: _searchXenoCanto,
                       onSpeciesSearchChanged: (_) => setState(() {}),
-                      onFilterChanged:
-                          (filter) => setState(() => _libraryFilter = filter),
                       onAdd: _addXenoSound,
                       onDownloadSpecies: _downloadSpeciesFromXeno,
                       onDownload: _downloadXenoSound,
@@ -2965,10 +2943,9 @@ Future<bool> showDeleteAlarmDialog(
 class _LibraryPanel extends StatelessWidget {
   final List<BirdSound> library;
   final List<BirdName> species;
-  final DailyBirdPicks daily;
+  final DailyBird daily;
   final TextEditingController controller;
   final TextEditingController speciesSearchController;
-  final BirdLibraryFilter filter;
   final bool searching;
   final Set<String> downloadingIds;
   final Map<String, double?> downloadProgress;
@@ -2977,7 +2954,6 @@ class _LibraryPanel extends StatelessWidget {
   final VoidCallback onUpload;
   final VoidCallback onSearch;
   final ValueChanged<String> onSpeciesSearchChanged;
-  final ValueChanged<BirdLibraryFilter> onFilterChanged;
   final ValueChanged<BirdSound> onAdd;
   final ValueChanged<BirdName> onDownloadSpecies;
   final ValueChanged<BirdSound> onDownload;
@@ -2989,7 +2965,6 @@ class _LibraryPanel extends StatelessWidget {
     required this.daily,
     required this.controller,
     required this.speciesSearchController,
-    required this.filter,
     required this.searching,
     required this.downloadingIds,
     required this.downloadProgress,
@@ -2998,7 +2973,6 @@ class _LibraryPanel extends StatelessWidget {
     required this.onUpload,
     required this.onSearch,
     required this.onSpeciesSearchChanged,
-    required this.onFilterChanged,
     required this.onAdd,
     required this.onDownloadSpecies,
     required this.onDownload,
@@ -3011,7 +2985,8 @@ class _LibraryPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final star = daily.star;
+    final star = daily.bird;
+    final query = speciesSearchController.text.trim();
     return _LargeTitleScrollView(
       title: '鸟鸣库',
       actions: [
@@ -3022,6 +2997,49 @@ class _LibraryPanel extends StatelessWidget {
         ),
       ],
       children: [
+        // 搜索框放在最上面。以前这下面还挂着一串「名录前 30 条」，不搜也一直杵在那儿、
+        // 永远是同几只鸵鸟，既占地方又看着像坏了——现在不输入就什么都不显示。
+        TextField(
+          controller: speciesSearchController,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            hintText: '搜鸟种：中文 / 英文 / 拉丁名',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon:
+                query.isEmpty
+                    ? null
+                    : IconButton(
+                      tooltip: '清空',
+                      icon: const Icon(Icons.close),
+                      onPressed: () {
+                        speciesSearchController.clear();
+                        onSpeciesSearchChanged('');
+                      },
+                    ),
+          ),
+          onChanged: onSpeciesSearchChanged,
+        ),
+        if (query.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          if (species.isEmpty)
+            const _EmptyHint(icon: Icons.search_off, text: '没找到匹配的鸟种，换个词试试。')
+          else
+            _GroupedCard(
+              children: [
+                for (final bird in species)
+                  _SpeciesDownloadTile(
+                    bird: bird,
+                    sound: _soundFor(bird),
+                    downloading: downloadingIds.contains('species-${bird.sci}'),
+                    progress: downloadProgress['species-${bird.sci}'],
+                    previewing: _soundFor(bird)?.id == previewingSoundId,
+                    onPreview: onPreview,
+                    onDownload: onDownloadSpecies,
+                  ),
+              ],
+            ),
+        ],
+        const SizedBox(height: 22),
         if (star != null) ...[
           const _SectionLabel('每日一鸟'),
           _DailyBirdCard(
@@ -3035,69 +3053,6 @@ class _LibraryPanel extends StatelessWidget {
           ),
           const SizedBox(height: 22),
         ],
-        if (daily.recommendations.isNotEmpty) ...[
-          const _SectionLabel('今日推荐 · 还没下载的鸟'),
-          _GroupedCard(
-            children: [
-              for (final bird in daily.recommendations)
-                _SpeciesDownloadTile(
-                  bird: bird,
-                  sound: _soundFor(bird),
-                  downloading: downloadingIds.contains('species-${bird.sci}'),
-                  progress: downloadProgress['species-${bird.sci}'],
-                  previewing: _soundFor(bird)?.id == previewingSoundId,
-                  onPreview: onPreview,
-                  onDownload: onDownloadSpecies,
-                ),
-            ],
-          ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(6, 8, 6, 0),
-            child: Text(
-              '每天换一批，过了零点自动刷新。',
-              style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8E)),
-            ),
-          ),
-          const SizedBox(height: 22),
-        ],
-        const _SectionLabel('鸟种搜索'),
-        TextField(
-          controller: speciesSearchController,
-          decoration: const InputDecoration(
-            hintText: '搜中英文或拉丁名，例如：杜鹃 / cuckoo / Cuculus',
-            prefixIcon: Icon(Icons.search),
-          ),
-          onChanged: onSpeciesSearchChanged,
-        ),
-        const SizedBox(height: 10),
-        _SegmentedPicker<BirdLibraryFilter>(
-          segments: const [
-            (value: BirdLibraryFilter.all, label: '全部'),
-            (value: BirdLibraryFilter.downloaded, label: '已下载'),
-            (value: BirdLibraryFilter.notDownloaded, label: '未下载'),
-          ],
-          selected: filter,
-          onChanged: onFilterChanged,
-        ),
-        const SizedBox(height: 12),
-        if (species.isEmpty)
-          const _EmptyHint(icon: Icons.search_off, text: '没找到匹配的鸟种，换个词试试。')
-        else
-          _GroupedCard(
-            children: [
-              for (final bird in species.take(30))
-                _SpeciesDownloadTile(
-                  bird: bird,
-                  sound: _soundFor(bird),
-                  downloading: downloadingIds.contains('species-${bird.sci}'),
-                  progress: downloadProgress['species-${bird.sci}'],
-                  previewing: _soundFor(bird)?.id == previewingSoundId,
-                  onPreview: onPreview,
-                  onDownload: onDownloadSpecies,
-                ),
-            ],
-          ),
-        const SizedBox(height: 22),
         const _SectionLabel('xeno-canto 高级查询'),
         Container(
           decoration: BoxDecoration(
@@ -3190,8 +3145,8 @@ class _LibraryPanel extends StatelessWidget {
   }
 }
 
-/// 「每日一鸟」卡片：当天固定的一只鸟，隔天自动换。已经在音库里就能直接试听，
-/// 没有就一键从 xeno-canto 下一条回来。
+/// 「每日一鸟」卡片：当天固定的一只鸟 + 一张来自维基百科的照片，隔天自动换。
+/// 已经在音库里就能直接试听，没有就一键从 xeno-canto 下一条回来。
 class _DailyBirdCard extends StatelessWidget {
   final BirdName bird;
   final BirdSound? sound;
@@ -3217,7 +3172,7 @@ class _DailyBirdCard extends StatelessWidget {
     final light = theme.brightness == Brightness.light;
     final playable = sound?.playable == true;
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         gradient: LinearGradient(
@@ -3245,26 +3200,41 @@ class _DailyBirdCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            bird.display,
-            style: const TextStyle(
-              fontSize: 30,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
-              color: Colors.white,
-            ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _BirdPhoto(sciName: bird.sci, size: 104),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      bird.display,
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.5,
+                        height: 1.15,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${bird.en}\n${bird.sci}',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        height: 1.4,
+                        color: Colors.white.withValues(alpha: 0.82),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            '${bird.en}\n${bird.sci}',
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.4,
-              color: Colors.white.withValues(alpha: 0.82),
-            ),
-          ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
           Row(
             children: [
               if (playable)
@@ -3317,17 +3287,123 @@ class _DailyBirdCard extends StatelessWidget {
                   ),
                 ),
               const SizedBox(width: 12),
-              if (playable)
-                Text(
-                  '已在音库',
+              // 来源说明放这儿：图片取自维基百科、鸟名取自 IOC 名录，不管这次有没有取到图都成立。
+              Expanded(
+                child: Text(
+                  '鸟名来自 IOC 名录\n图片来自维基百科',
+                  textAlign: TextAlign.right,
                   style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.white.withValues(alpha: 0.8),
+                    fontSize: 10.5,
+                    height: 1.3,
+                    color: Colors.white.withValues(alpha: 0.7),
                   ),
                 ),
+              ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 每日一鸟的照片：按学名去维基百科取缩略图，取不到就画那只卡通鸟兜底。
+/// 结果（含「查无此鸟」）都缓存起来，同一只鸟一天只查一次。
+class _BirdPhoto extends StatefulWidget {
+  final String sciName;
+  final double size;
+
+  const _BirdPhoto({required this.sciName, required this.size});
+
+  @override
+  State<_BirdPhoto> createState() => _BirdPhotoState();
+}
+
+class _BirdPhotoState extends State<_BirdPhoto> {
+  String? _url;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(_BirdPhoto oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 过了零点换鸟时会走到这里。
+    if (oldWidget.sciName != widget.sciName) _resolve();
+  }
+
+  Future<void> _resolve() async {
+    setState(() => _loading = true);
+    final url = await BirdPhotos.thumbnailFor(widget.sciName);
+    if (!mounted) return;
+    setState(() {
+      _url = url;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final url = _url;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: widget.size,
+        height: widget.size,
+        color: Colors.white.withValues(alpha: 0.16),
+        child:
+            url == null
+                ? Center(
+                  child:
+                      _loading
+                          ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white70,
+                            ),
+                          )
+                          : SizedBox(
+                            width: widget.size * 0.8,
+                            height: widget.size * 0.8,
+                            child: CustomPaint(
+                              painter: const _CartoonClockBirdPainter(
+                                dark: true,
+                              ),
+                            ),
+                          ),
+                )
+                : Image.network(
+                  url,
+                  fit: BoxFit.cover,
+                  // 加载中/失败都退回同一个占位，别让卡片忽大忽小。
+                  loadingBuilder:
+                      (context, child, progress) =>
+                          progress == null
+                              ? child
+                              : const Center(
+                                child: SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ),
+                  errorBuilder:
+                      (context, error, stack) => Center(
+                        child: Icon(
+                          Icons.image_not_supported_outlined,
+                          color: Colors.white.withValues(alpha: 0.7),
+                        ),
+                      ),
+                ),
       ),
     );
   }
@@ -3526,50 +3602,81 @@ class _SpeciesDownloadTile extends StatelessWidget {
   }
 }
 
-/// 「每日一鸟 / 今日推荐」的当日结果。按日期缓存，隔天重算；
+/// 「每日一鸟」的当日结果。按日期缓存，隔天重算；
 /// day 为 null = 鸟名表还没加载好的临时空结果，不该被缓存。
-class DailyBirdPicks {
+class DailyBird {
   final DateTime? day;
-  final BirdName? star;
-  final List<BirdName> recommendations;
+  final BirdName? bird;
 
-  const DailyBirdPicks({
-    required this.day,
-    required this.star,
-    required this.recommendations,
-  });
+  const DailyBird({required this.day, required this.bird});
 }
 
-/// 按日期定随机种子挑出「每日一鸟」和「今日推荐」：同一天永远是同一批，隔天自动换。
-/// 推荐只从**还没下载**的鸟种里挑（正好都是可以去下的），且不与每日一鸟重复。
+/// 按日期定随机种子挑「每日一鸟」：同一天永远是同一只，隔天自动换。
 /// [names] 为空（鸟名表还没加载完）时返回 `day == null` 的空结果，调用方据此不要缓存。
-/// 纯函数，方便直接测；UI 侧的缓存在 `_AlarmHomePageState._dailyBirdPicks`。
-DailyBirdPicks pickDailyBirds({
+/// 纯函数，方便直接测；UI 侧的缓存在 `_AlarmHomePageState._dailyBird`。
+DailyBird pickDailyBird({
   required List<BirdName> names,
-  required Set<String> downloadedSci,
   required DateTime day,
-  int count = 6,
 }) {
   // 只挑有中文名的鸟种：名录里不少条目没中文名，推给用户看意义不大。
   final named = names.where((bird) => bird.cn.isNotEmpty).toList();
-  if (named.isEmpty) {
-    return const DailyBirdPicks(day: null, star: null, recommendations: []);
-  }
+  if (named.isEmpty) return const DailyBird(day: null, bird: null);
   final random = Random(day.year * 10000 + day.month * 100 + day.day);
-  final star = named[random.nextInt(named.length)];
-  final picks = <BirdName>[];
-  final used = <String>{star.sci};
-  for (var attempt = 0; attempt < 200 && picks.length < count; attempt++) {
-    final candidate = named[random.nextInt(named.length)];
-    if (!used.add(candidate.sci)) continue;
-    if (downloadedSci.contains(candidate.sci)) continue;
-    picks.add(candidate);
-  }
-  return DailyBirdPicks(
+  return DailyBird(
     day: DateTime(day.year, day.month, day.day),
-    star: star,
-    recommendations: picks,
+    bird: named[random.nextInt(named.length)],
   );
+}
+
+/// 每日一鸟的照片：按学名问维基百科要一张缩略图（公开接口，不需要 key）。
+/// 先试中文站，没有再试英文站；查到的 URL（以及「查无此鸟」）都存进 SharedPreferences，
+/// 同一只鸟只查一次——每天只换一只鸟，没必要每次打开都发请求。
+class BirdPhotos {
+  static const _prefix = 'bird_photo_';
+  static final Map<String, String?> _memory = {};
+
+  static Future<String?> thumbnailFor(String sciName) async {
+    if (sciName.isEmpty) return null;
+    if (_memory.containsKey(sciName)) return _memory[sciName];
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getString('$_prefix$sciName');
+    if (cached != null) {
+      // 空字符串 = 之前查过、确实没有图，别再反复去问。
+      final url = cached.isEmpty ? null : cached;
+      _memory[sciName] = url;
+      return url;
+    }
+    String? url;
+    for (final host in const ['zh.wikipedia.org', 'en.wikipedia.org']) {
+      url = await _fetchThumbnail(host, sciName);
+      if (url != null) break;
+    }
+    _memory[sciName] = url;
+    await prefs.setString('$_prefix$sciName', url ?? '');
+    return url;
+  }
+
+  static Future<String?> _fetchThumbnail(String host, String sciName) async {
+    try {
+      final title = Uri.encodeComponent(sciName.replaceAll(' ', '_'));
+      final response = await http
+          .get(
+            Uri.parse('https://$host/api/rest_v1/page/summary/$title'),
+            headers: const {'accept': 'application/json'},
+          )
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return null;
+      final data =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final thumbnail = data['thumbnail'];
+      if (thumbnail is Map && thumbnail['source'] is String) {
+        return thumbnail['source'] as String;
+      }
+    } catch (_) {
+      // 离线或超时：这次没图，占位图顶上。
+    }
+    return null;
+  }
 }
 
 extension _FirstOrNull<T> on Iterable<T> {

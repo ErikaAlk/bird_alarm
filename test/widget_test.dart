@@ -39,7 +39,7 @@ void main() {
     await tester.drag(find.byType(PageView), const Offset(-500, 0));
     await tester.pumpAndSettle();
 
-    expect(find.text('鸟种搜索'), findsOneWidget);
+    expect(find.text('搜鸟种：中文 / 英文 / 拉丁名'), findsOneWidget);
     expect(find.text('下一次唤醒'), findsNothing);
   });
 
