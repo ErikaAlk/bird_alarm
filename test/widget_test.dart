@@ -28,6 +28,21 @@ void main() {
     }
   });
 
+  testWidgets('Swiping left moves to the next tab', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const BirdAlarmApp());
+    await tester.pumpAndSettle();
+    expect(find.text('下一次唤醒'), findsOneWidget);
+
+    // 有悬浮底栏就该能左右滑动翻页，光能点很别扭。
+    await tester.drag(find.byType(PageView), const Offset(-500, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.text('鸟种搜索'), findsOneWidget);
+    expect(find.text('下一次唤醒'), findsNothing);
+  });
+
   testWidgets('Settings tab exposes appearance and ring settings', (
     WidgetTester tester,
   ) async {

@@ -34,7 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `AlarmRingActivity.kt` —— **已不再作为响铃 UI**（仅残留 pending-intent 引用，无害）。响铃界面现在是 Flutter 的 `AlarmOverlay`。
 - **Flutter（`lib/main.dart`）** 负责：UI、闹钟数据模型与持久化、排闹钟时机的计算（`_nextEnabledAlarmDateTime` → 传给原生 `scheduleAlarmAt`）、以及**响铃时的全屏遮罩 UI**。
   - 关键类：`_AlarmHomePageState`（全部状态/逻辑）、`BirdAlarm`（含 `RepeatRule` 枚举：自定义星期 / 中国工作日 / 中国法定节假日）、`AlarmOverlay`（全屏响铃遮罩）、`ChinaWorkdayCalendar` + `ChinaHolidayData`（节假日判定）、`AppSettings`（全局设置，见下）。
-  - **四个 Tab**：闹钟 / 鸟鸣 / 设置 / 关于，靠 `IndexedStack` + 自绘的悬浮底栏 `_FloatingTabBar`（`Scaffold.extendBody`，各页底部留 `_kFloatingBarInset`）。每页用 `_LargeTitleScrollView`（iOS 大标题）。
+  - **四个 Tab**：闹钟 / 鸟鸣 / 设置 / 关于，靠 `PageView` + 自绘的悬浮底栏 `_FloatingTabBar`（叠在 body 上，各页底部留 `_kFloatingBarInset`）。**既能点底栏也能左右滑动翻页**；每页必须包 `_KeepAlivePage`（`PageView` 会销毁滑出缓存区的页面，不保活则滚动位置/搜索框内容丢失），点底栏走 `_goToTab` → `animateToPage`，高亮由 `onPageChanged` 更新。每页用 `_LargeTitleScrollView`（iOS 大标题）。
   - **设置统一在设置页**（`_SettingsTab`）：主题模式 / 闹铃渐响 / xeno-canto API Key / 权限自检 + 测试闹钟。顶栏不再放设置与测试图标，**新增设置请加在这里，别再开弹窗**。
 
 ## 锁屏全屏响铃的关键约束（动 targetSdk 或响铃 UI 前必读）
@@ -59,6 +59,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **深色模式**：`AppSettings.themeMode` 三态（跟随系统 / 浅色 / 深色），在设置页切换；`BirdAlarmApp` 用 `AnimatedBuilder(animation: appSettings)` 包住 `MaterialApp`，`main()` 里先 `await appSettings.load()` 再 `runApp`（否则会先按系统渲染一帧再跳）。报时卡（`_BirdTimePanel`）的底色是**固定渐变**而非主题色——浅色是日出黄、深色是夜绿（`#0F2C29→#1B4741`）；正因为底色固定，卡片里的文字/图标也必须用**固定色**（`onPanel`/`onPanelMuted`），用主题色会在某一种模式下糊在底色上看不清。两个 painter（`_SkyPatternPainter`/`_CartoonClockBirdPainter`）都吃 `dark` 参数：深色下山丘压暗、卡通鸟描边换浅色（深棕描边在夜色底上会整个消失）。**别再让这张卡恒为浅色**——那样深色模式下就是黑底上贴一张大白纸，夜里很晃眼。
 - **响铃设置必须落到原生 prefs**：响铃发生在原生侧、那一刻 App 可能没在跑，所以渐响这类设置由 `_syncSoundSettings()` 经 `updateSoundSettings` 写进 `bird_alarm_native`，**不要指望响铃时回头问 Flutter 要**。
 - **双击手势别用 `onDoubleTap`**：`GestureDetector.onDoubleTap` 会让**单击**一直等到双击超时（~300ms）才生效，点一下顿一下。星期格与分段控件都改成自己按时间戳判双击（`_kDoubleTapWindow`），单击零延迟。判「已全选则清空」要用**第一下点击之前**的选择（`_daysBeforeLastTap`），否则全选时永远清不掉。
+- **列表项别用左滑手势**：整页要留给 `PageView` 左右滑动切 Tab，闹钟卡片再做「左滑删除」会抢手势（手指落在卡片上一划就变成拖删除条，页翻不动）。删除走**长按卡片**或编辑弹窗里的删除按钮，两处共用 `showDeleteAlarmDialog`。
+- **开关一律用 Material `Switch`**：用户明确不要「安卓苹果缝合」，`CupertinoSwitch` 别再回来。大标题、悬浮底栏、圆角卡片、时间滚轮这些 iOS 味的保留，开关跟系统走。
+- **「还有多久响铃」只在 App 内**：报时卡的倒计时由 `countdownText()` 按 `_clock` 每秒重算（只重建那一小块）；**不要**为它加常驻通知——通知里只保留响铃前 10 分钟那条倒计时。
 - **选中不能改变尺寸**：`SegmentedButton`/`FilterChip` 选中后会多出对勾、把后面的控件挤走。分段控件和星期格都自绘（`_SegmentedPicker` / `_WeekdayPicker`），等宽 + 固定高，选中只换底色与字重；`test/widget_test.dart` 里有守住这条的用例。
 
 ## 仓库约定

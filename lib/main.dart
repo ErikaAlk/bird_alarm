@@ -406,6 +406,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   DateTime? _lastDismissedAt;
   bool _searching = false;
   int _selectedTab = 0;
+  final _pageController = PageController();
   BirdLibraryFilter _libraryFilter = BirdLibraryFilter.all;
   // 下载进度：id → 0~1，null 表示进度未知（转码阶段）。同时驱动 App 内进度条与原生 Live Update 通知。
   Map<String, double?> _downloadProgress = const {};
@@ -570,6 +571,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     _ticker?.cancel();
     _fadeTimer?.cancel();
     _clock.dispose();
+    _pageController.dispose();
     _queryController.dispose();
     _speciesSearchController.dispose();
     _player.dispose();
@@ -1369,19 +1371,25 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   Future<void> _editAlarm([BirdAlarm? existing]) async {
-    final result = await showModalBottomSheet<BirdAlarm>(
+    final result = await showModalBottomSheet<AlarmEditorResult>(
       context: context,
       isScrollControlled: true,
       builder: (context) => AlarmEditor(alarm: existing),
     );
     if (result == null) return;
+    if (result.delete) {
+      if (existing != null) await _deleteAlarm(existing);
+      return;
+    }
+    final saved = result.alarm;
+    if (saved == null) return;
     setState(() {
       if (existing == null) {
-        _alarms = [..._alarms, result];
+        _alarms = [..._alarms, saved];
       } else {
         _alarms =
             _alarms
-                .map((alarm) => alarm.id == result.id ? result : alarm)
+                .map((alarm) => alarm.id == saved.id ? saved : alarm)
                 .toList();
       }
     });
@@ -1422,78 +1430,81 @@ class _AlarmHomePageState extends State<AlarmHomePage>
           // （毛玻璃才有东西可糊），各页滚动内容底部自己留 _kFloatingBarInset 的空白。
           body: Stack(
             children: [
-              IndexedStack(
-                index: _selectedTab,
+              // 悬浮底栏配 PageView：既能点底栏切页，也能左右滑动翻页（只有底栏不能滑很别扭）。
+              // 各页包一层 _KeepAlivePage 保住状态——PageView 会回收滑出缓存区的页面，
+              // 不保活的话切回来滚动位置、搜索框内容都没了（IndexedStack 时代不用操心这个）。
+              PageView(
+                controller: _pageController,
+                onPageChanged: (index) => setState(() => _selectedTab = index),
                 children: [
-                  _AlarmTab(
-                    clock: _clock,
-                    nextAlarm: _nextAlarmText(),
-                    alarms: _sortByTime(_alarms),
-                    onAddAlarm: () => _editAlarm(),
-                    onEditAlarm: _editAlarm,
-                    onDeleteAlarm: (alarm) async {
-                      setState(() {
-                        _alarms =
-                            _alarms
-                                .where((item) => item.id != alarm.id)
-                                .toList();
-                      });
-                      await _save();
-                    },
-                    onAlarmEnabledChanged: (alarm, enabled) async {
-                      setState(() {
-                        _alarms =
-                            _alarms
-                                .map(
-                                  (item) =>
-                                      item.id == alarm.id
-                                          ? item.copyWith(enabled: enabled)
-                                          : item,
-                                )
-                                .toList();
-                      });
-                      await _save();
-                    },
+                  _KeepAlivePage(
+                    child: _AlarmTab(
+                      clock: _clock,
+                      nextAlarm: _nextAlarmText(),
+                      nextAlarmAt: _nextEnabledAlarmDateTime(),
+                      alarms: _sortByTime(_alarms),
+                      onAddAlarm: () => _editAlarm(),
+                      onEditAlarm: _editAlarm,
+                      onDeleteAlarm: _deleteAlarm,
+                      onAlarmEnabledChanged: (alarm, enabled) async {
+                        setState(() {
+                          _alarms =
+                              _alarms
+                                  .map(
+                                    (item) =>
+                                        item.id == alarm.id
+                                            ? item.copyWith(enabled: enabled)
+                                            : item,
+                                  )
+                                  .toList();
+                        });
+                        await _save();
+                      },
+                    ),
                   ),
-                  _LibraryPanel(
-                    library: _library,
-                    species: _filteredBirdNames(),
-                    daily: _dailyBirdPicks(),
-                    controller: _queryController,
-                    speciesSearchController: _speciesSearchController,
-                    filter: _libraryFilter,
-                    searching: _searching,
-                    downloadingIds: _downloadingIds,
-                    downloadProgress: _downloadProgress,
-                    previewingSoundId: _previewingSoundId,
-                    results: _searchResults,
-                    onUpload: _pickLocalAudio,
-                    onSearch: _searchXenoCanto,
-                    onSpeciesSearchChanged: (_) => setState(() {}),
-                    onFilterChanged:
-                        (filter) => setState(() => _libraryFilter = filter),
-                    onAdd: _addXenoSound,
-                    onDownloadSpecies: _downloadSpeciesFromXeno,
-                    onDownload: _downloadXenoSound,
-                    onPreview: _togglePreview,
+                  _KeepAlivePage(
+                    child: _LibraryPanel(
+                      library: _library,
+                      species: _filteredBirdNames(),
+                      daily: _dailyBirdPicks(),
+                      controller: _queryController,
+                      speciesSearchController: _speciesSearchController,
+                      filter: _libraryFilter,
+                      searching: _searching,
+                      downloadingIds: _downloadingIds,
+                      downloadProgress: _downloadProgress,
+                      previewingSoundId: _previewingSoundId,
+                      results: _searchResults,
+                      onUpload: _pickLocalAudio,
+                      onSearch: _searchXenoCanto,
+                      onSpeciesSearchChanged: (_) => setState(() {}),
+                      onFilterChanged:
+                          (filter) => setState(() => _libraryFilter = filter),
+                      onAdd: _addXenoSound,
+                      onDownloadSpecies: _downloadSpeciesFromXeno,
+                      onDownload: _downloadXenoSound,
+                      onPreview: _togglePreview,
+                    ),
                   ),
-                  _SettingsTab(
-                    onFadeInChanged: (seconds) async {
-                      await appSettings.setFadeInSeconds(seconds);
-                      await _syncSoundSettings();
-                      if (mounted) setState(() {});
-                    },
-                    onTestAlarm: _testSystemAlarm,
-                    onCheckPermissions: _requestAlarmPermissions,
+                  _KeepAlivePage(
+                    child: _SettingsTab(
+                      onFadeInChanged: (seconds) async {
+                        await appSettings.setFadeInSeconds(seconds);
+                        await _syncSoundSettings();
+                        if (mounted) setState(() {});
+                      },
+                      onTestAlarm: _testSystemAlarm,
+                      onCheckPermissions: _requestAlarmPermissions,
+                    ),
                   ),
-                  const _AboutPage(),
+                  const _KeepAlivePage(child: _AboutPage()),
                 ],
               ),
               Align(
                 alignment: Alignment.bottomCenter,
                 child: _FloatingTabBar(
                   selectedIndex: _selectedTab,
-                  onSelected: (index) => setState(() => _selectedTab = index),
+                  onSelected: _goToTab,
                 ),
               ),
             ],
@@ -1509,6 +1520,26 @@ class _AlarmHomePageState extends State<AlarmHomePage>
           ),
       ],
     );
+  }
+
+  // 点底栏切页：动画滑过去，和手动滑动是同一条路径（onPageChanged 负责更新高亮）。
+  void _goToTab(int index) {
+    if (!_pageController.hasClients) {
+      setState(() => _selectedTab = index);
+      return;
+    }
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  Future<void> _deleteAlarm(BirdAlarm alarm) async {
+    setState(() {
+      _alarms = _alarms.where((item) => item.id != alarm.id).toList();
+    });
+    await _save();
   }
 
   String _nextAlarmText() {
@@ -1612,6 +1643,9 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 class _AlarmTab extends StatelessWidget {
   final ValueListenable<DateTime> clock;
   final String nextAlarm;
+  // 下一次响铃的绝对时刻，用来在报时卡里算「还有多久」。只在 App 内显示，
+  // 不进通知——通知只有响铃前 10 分钟那条倒计时。
+  final DateTime? nextAlarmAt;
   final List<BirdAlarm> alarms;
   final VoidCallback onAddAlarm;
   final ValueChanged<BirdAlarm> onEditAlarm;
@@ -1622,6 +1656,7 @@ class _AlarmTab extends StatelessWidget {
   const _AlarmTab({
     required this.clock,
     required this.nextAlarm,
+    required this.nextAlarmAt,
     required this.alarms,
     required this.onAddAlarm,
     required this.onEditAlarm,
@@ -1641,7 +1676,11 @@ class _AlarmTab extends StatelessWidget {
         ),
       ],
       children: [
-        _BirdTimePanel(clock: clock, nextAlarm: nextAlarm),
+        _BirdTimePanel(
+          clock: clock,
+          nextAlarm: nextAlarm,
+          nextAlarmAt: nextAlarmAt,
+        ),
         const SizedBox(height: 24),
         const _SectionLabel('我的闹钟'),
         if (alarms.isEmpty)
@@ -1660,7 +1699,7 @@ class _AlarmTab extends StatelessWidget {
           const Padding(
             padding: EdgeInsets.only(top: 6, left: 6),
             child: Text(
-              '向左滑动闹钟可删除。',
+              '点闹钟可修改，长按可删除。',
               style: TextStyle(fontSize: 12, color: Color(0xFF8A8A8E)),
             ),
           ),
@@ -1669,7 +1708,30 @@ class _AlarmTab extends StatelessWidget {
   }
 }
 
-// ────────────────────────────── 通用 UI 构件（iOS 观感） ──────────────────────────────
+// ────────────────────────────── 通用 UI 构件 ──────────────────────────────
+
+/// 给 PageView 的每一页保活。PageView 会销毁滑出缓存区的页面，不保活的话切回来
+/// 滚动位置、搜索框内容、展开状态全没了（换成 PageView 之前用 IndexedStack 不用管这个）。
+class _KeepAlivePage extends StatefulWidget {
+  final Widget child;
+
+  const _KeepAlivePage({required this.child});
+
+  @override
+  State<_KeepAlivePage> createState() => _KeepAlivePageState();
+}
+
+class _KeepAlivePageState extends State<_KeepAlivePage>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
+}
 
 /// 悬浮底栏：毛玻璃胶囊 + 选中项高亮。用 [Scaffold.extendBody] 让内容从它下面穿过去，
 /// 各页的滚动内容底部留够 [_kFloatingBarInset] 的空白，最后一条不会被压住。
@@ -2310,6 +2372,21 @@ class _AlarmEditorState extends State<AlarmEditor> {
                   child: const Text('保存闹钟'),
                 ),
               ),
+              // 改已有闹钟时给一个删除入口：卡片长按也能删，但从编辑页里删更好找。
+              if (widget.alarm != null) ...[
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: TextButton.icon(
+                    onPressed: _requestDelete,
+                    style: TextButton.styleFrom(
+                      foregroundColor: theme.colorScheme.error,
+                    ),
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    label: const Text('删除闹钟'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -2317,23 +2394,43 @@ class _AlarmEditorState extends State<AlarmEditor> {
     );
   }
 
+  Future<void> _requestDelete() async {
+    final alarm = widget.alarm;
+    if (alarm == null) return;
+    final confirmed = await showDeleteAlarmDialog(context, alarm);
+    if (!confirmed || !mounted) return;
+    Navigator.of(context).pop(const AlarmEditorResult.deleted());
+  }
+
   void _submit() {
     Navigator.of(context).pop(
-      BirdAlarm(
-        id:
-            widget.alarm?.id ??
-            DateTime.now().microsecondsSinceEpoch.toString(),
-        time: _time,
-        repeatDays: _days,
-        repeatRule: _rule,
-        enabled: widget.alarm?.enabled ?? true,
-        label:
-            _labelController.text.trim().isEmpty
-                ? '鸟鸣唤醒'
-                : _labelController.text.trim(),
+      AlarmEditorResult(
+        alarm: BirdAlarm(
+          id:
+              widget.alarm?.id ??
+              DateTime.now().microsecondsSinceEpoch.toString(),
+          time: _time,
+          repeatDays: _days,
+          repeatRule: _rule,
+          enabled: widget.alarm?.enabled ?? true,
+          label:
+              _labelController.text.trim().isEmpty
+                  ? '鸟鸣唤醒'
+                  : _labelController.text.trim(),
+        ),
       ),
     );
   }
+}
+
+/// 编辑弹窗的返回值：保存则带回闹钟，删除则 [delete] 为 true（弹窗被划掉时返回 null）。
+class AlarmEditorResult {
+  final BirdAlarm? alarm;
+  final bool delete;
+
+  const AlarmEditorResult({required this.alarm}) : delete = false;
+
+  const AlarmEditorResult.deleted() : alarm = null, delete = true;
 }
 
 /// 星期选择：七格等宽、高度固定（46）。选中只换底色与字重，**尺寸恒定**——
@@ -2403,8 +2500,13 @@ class _WeekdayPicker extends StatelessWidget {
 class _BirdTimePanel extends StatelessWidget {
   final ValueListenable<DateTime> clock;
   final String nextAlarm;
+  final DateTime? nextAlarmAt;
 
-  const _BirdTimePanel({required this.clock, required this.nextAlarm});
+  const _BirdTimePanel({
+    required this.clock,
+    required this.nextAlarm,
+    required this.nextAlarmAt,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -2445,6 +2547,7 @@ class _BirdTimePanel extends StatelessWidget {
                           (context, now, _) => _TimeSummary(
                             now: now,
                             nextAlarm: nextAlarm,
+                            nextAlarmAt: nextAlarmAt,
                             onPanel: onPanel,
                             onPanelMuted: onPanelMuted,
                             dark: dark,
@@ -2472,6 +2575,7 @@ class _BirdTimePanel extends StatelessWidget {
 class _TimeSummary extends StatelessWidget {
   final DateTime now;
   final String nextAlarm;
+  final DateTime? nextAlarmAt;
   final Color onPanel;
   final Color onPanelMuted;
   final bool dark;
@@ -2479,6 +2583,7 @@ class _TimeSummary extends StatelessWidget {
   const _TimeSummary({
     required this.now,
     required this.nextAlarm,
+    required this.nextAlarmAt,
     required this.onPanel,
     required this.onPanelMuted,
     required this.dark,
@@ -2486,6 +2591,7 @@ class _TimeSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final countdown = countdownText(now, nextAlarmAt);
     final timeText =
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     return Column(
@@ -2531,18 +2637,22 @@ class _TimeSummary extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // 倒计时当主行：它才是「还要睡多久」的答案，而且短，不会把这行撑爆。
+                    // 具体是哪一个闹钟放在下面一行，长了就省略号——之前两截塞一行会 overflow。
                     Text(
-                      '下一次唤醒',
-                      style: TextStyle(fontSize: 11.5, color: onPanelMuted),
-                    ),
-                    const SizedBox(height: 1),
-                    Text(
-                      nextAlarm,
+                      countdown ?? '下一次唤醒',
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                         color: onPanel,
                       ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      nextAlarm,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11.5, color: onPanelMuted),
                     ),
                   ],
                 ),
@@ -2553,6 +2663,28 @@ class _TimeSummary extends StatelessWidget {
       ],
     );
   }
+}
+
+/// 「还有 8 小时 12 分」这种倒计时文案。只在 App 内显示——通知里只有响铃前 10 分钟
+/// 那条倒计时，不想为了看个剩余时间就整夜挂一条常驻通知。
+/// 返回 null 表示没有启用的闹钟（或时刻已过），这时不显示这一段。
+String? countdownText(DateTime now, DateTime? target) {
+  if (target == null) return null;
+  final remaining = target.difference(now);
+  if (remaining.isNegative) return null;
+  final days = remaining.inDays;
+  final hours = remaining.inHours % 24;
+  final minutes = remaining.inMinutes % 60;
+  if (days > 0) {
+    return hours > 0 ? '还有 $days 天 $hours 小时' : '还有 $days 天';
+  }
+  if (remaining.inHours > 0) {
+    return minutes > 0
+        ? '还有 ${remaining.inHours} 小时 $minutes 分'
+        : '还有 ${remaining.inHours} 小时';
+  }
+  if (remaining.inMinutes > 0) return '还有 $minutes 分钟';
+  return '不到 1 分钟';
 }
 
 /// 报时卡背景的云与山丘。深色模式下压到几乎看不见的低对比度——原来的亮绿山丘
@@ -2727,8 +2859,9 @@ class _CartoonClockBirdPainter extends CustomPainter {
       oldDelegate.dark != dark;
 }
 
-/// 闹钟卡片：仿 iOS 时钟——超大号时间 + 标签/重复的次要行 + Cupertino 开关，
-/// 向左滑动删除（带二次确认，免得半睡半醒时误删）。关掉的闹钟整体变淡。
+/// 闹钟卡片：大号时间 + 标签/重复的次要行 + 开关（Material 开关，跟系统一致）。
+/// 删除走**长按**弹确认框，刻意不用左滑：整页要留给左右滑动切 Tab，左滑删除会跟它抢手势
+/// ——手指落在卡片上一划就变成拖删除条，翻页翻不动。编辑弹窗里也有一个删除入口。
 class _AlarmTile extends StatelessWidget {
   final BirdAlarm alarm;
   final ValueChanged<bool> onChanged;
@@ -2742,84 +2875,53 @@ class _AlarmTile extends StatelessWidget {
     required this.onDelete,
   });
 
+  Future<void> _confirmDelete(BuildContext context) async {
+    final confirmed = await showDeleteAlarmDialog(context, alarm);
+    if (confirmed) onDelete();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: Dismissible(
-        key: ValueKey('alarm-${alarm.id}'),
-        direction: DismissDirection.endToStart,
-        background: Container(
-          alignment: Alignment.centerRight,
-          padding: const EdgeInsets.only(right: 24),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFF3B30),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: const Icon(Icons.delete_outline, color: Colors.white),
-        ),
-        confirmDismiss: (_) async {
-          final confirmed = await showCupertinoModalPopup<bool>(
-            context: context,
-            builder:
-                (context) => CupertinoActionSheet(
-                  title: Text('删除 ${alarm.time.format(context)} 的闹钟？'),
-                  actions: [
-                    CupertinoActionSheetAction(
-                      isDestructiveAction: true,
-                      onPressed: () => Navigator.of(context).pop(true),
-                      child: const Text('删除闹钟'),
-                    ),
-                  ],
-                  cancelButton: CupertinoActionSheetAction(
-                    onPressed: () => Navigator.of(context).pop(false),
-                    child: const Text('取消'),
-                  ),
-                ),
-          );
-          return confirmed ?? false;
-        },
-        onDismissed: (_) => onDelete(),
-        child: Material(
-          color: theme.cardTheme.color,
+      child: Material(
+        color: theme.cardTheme.color,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: () => _confirmDelete(context),
           borderRadius: BorderRadius.circular(20),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(20),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
-              child: Opacity(
-                opacity: alarm.enabled ? 1 : 0.45,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            alarm.time.format(context),
-                            style: theme.textTheme.displaySmall?.copyWith(
-                              fontWeight: FontWeight.w300,
-                              letterSpacing: -1,
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 16, 16),
+            child: Opacity(
+              opacity: alarm.enabled ? 1 : 0.45,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          alarm.time.format(context),
+                          style: theme.textTheme.displaySmall?.copyWith(
+                            fontWeight: FontWeight.w300,
+                            letterSpacing: -1,
+                            fontFeatures: const [FontFeature.tabularFigures()],
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${alarm.label} · ${_repeatText(alarm)}',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${alarm.label} · ${_repeatText(alarm)}',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    CupertinoSwitch(value: alarm.enabled, onChanged: onChanged),
-                  ],
-                ),
+                  ),
+                  Switch(value: alarm.enabled, onChanged: onChanged),
+                ],
               ),
             ),
           ),
@@ -2827,6 +2929,37 @@ class _AlarmTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 删除闹钟的二次确认（半睡半醒时容易误触，值得多问一句）。长按卡片和编辑页共用。
+Future<bool> showDeleteAlarmDialog(
+  BuildContext context,
+  BirdAlarm alarm,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder:
+        (context) => AlertDialog(
+          title: const Text('删除闹钟'),
+          content: Text(
+            '确定删除 ${alarm.time.format(context)} 的「${alarm.label}」吗？',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: TextButton.styleFrom(
+                foregroundColor: Theme.of(context).colorScheme.error,
+              ),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
+  );
+  return confirmed ?? false;
 }
 
 class _LibraryPanel extends StatelessWidget {
@@ -3758,7 +3891,7 @@ class _SettingsTabState extends State<_SettingsTab> {
               icon: Icons.volume_up_outlined,
               title: '闹铃渐响',
               subtitle: '音量由轻到响慢慢升上来，不会一上来就吓一跳',
-              trailing: CupertinoSwitch(
+              trailing: Switch(
                 value: fadeInSeconds > 0,
                 onChanged:
                     (enabled) => widget.onFadeInChanged(
