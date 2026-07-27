@@ -99,6 +99,13 @@ class MainActivity : FlutterActivity() {
                     requestAlarmPermissions()
                     result.success(null)
                 }
+                "checkAlarmPermissions" -> {
+                    result.success(collectPermissionStatus())
+                }
+                "openPermissionSetting" -> {
+                    openPermissionSetting(call.argument<String>("type") ?: "")
+                    result.success(null)
+                }
                 "stopAlarmSound" -> {
                     stopAlarmSound()
                     result.success(null)
@@ -116,6 +123,39 @@ class MainActivity : FlutterActivity() {
                     // 用户在倒计时通知里点「关闭闹钟」时，原生写入被跳过那一次的触发时刻。
                     // Flutter 重排闹钟时据此跳过这一次发生，避免「关了又被重排回来」。
                     result.success(getSkippedTrigger())
+                }
+                "updateSoundSettings" -> {
+                    // 设置页改动（目前是闹铃渐响时长）写进原生 prefs：响铃在原生侧发生，
+                    // 那一刻 App 可能根本没在跑，只能靠这份持久化设置。
+                    val fadeInSeconds = call.argument<Int>("fadeInSeconds") ?: 0
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putInt("fade_in_seconds", fadeInSeconds.coerceIn(0, 300))
+                        .apply()
+                    result.success(null)
+                }
+                "updateDownloadProgress" -> {
+                    // progress < 0 = 进度未知（转码中），显示不确定进度条。
+                    DownloadNotifier.update(
+                        this,
+                        call.argument<String>("title") ?: "正在下载鸟鸣",
+                        call.argument<String>("text") ?: "",
+                        call.argument<Int>("progress") ?: -1,
+                    )
+                    result.success(null)
+                }
+                "finishDownloadProgress" -> {
+                    val text = call.argument<String>("text")
+                    if (text.isNullOrEmpty()) {
+                        DownloadNotifier.hide(this)
+                    } else {
+                        DownloadNotifier.finish(
+                            this,
+                            call.argument<String>("title") ?: "鸟鸣下载完成",
+                            text,
+                        )
+                    }
+                    result.success(null)
                 }
                 "testSystemAlarm" -> {
                     clearScheduledSystemAlarms()
@@ -394,6 +434,76 @@ class MainActivity : FlutterActivity() {
             }
         }
     }
+
+    // 各项权限的当前状态。低于对应 Android 版本的机器默认视为「有」（系统没有这个开关）。
+    // 供设置页的「检查闹钟权限」自检列表使用——以前那个按钮只在缺权限时才跳转，
+    // 全都授权了就什么也不做，用户看着像按坏了。
+    private fun collectPermissionStatus(): Map<String, Boolean> {
+        val notificationManager =
+            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val notificationGranted =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        return mapOf(
+            // 运行时权限给了还不够：用户可能在系统里把整个通知关掉。
+            "notifications" to
+                (notificationGranted && notificationManager.areNotificationsEnabled()),
+            "fullScreenIntent" to
+                (Build.VERSION.SDK_INT < 34 || notificationManager.canUseFullScreenIntent()),
+            "exactAlarm" to
+                (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                    alarmManager.canScheduleExactAlarms()),
+            "battery" to powerManager.isIgnoringBatteryOptimizations(packageName),
+        )
+    }
+
+    // 打开某一项对应的系统设置页。ROM 上这些 Intent 不一定都在，失败一律退回应用详情页，
+    // 保证「点了有反应」。
+    private fun openPermissionSetting(type: String) {
+        val packageUri = Uri.parse("package:$packageName")
+        val intent = when (type) {
+            "notifications" -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                    PackageManager.PERMISSION_GRANTED
+                ) {
+                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2001)
+                    return
+                }
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            }
+            "fullScreenIntent" ->
+                if (Build.VERSION.SDK_INT >= 34) {
+                    Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, packageUri)
+                } else {
+                    appDetailsIntent(packageUri)
+                }
+            "exactAlarm" ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, packageUri)
+                } else {
+                    appDetailsIntent(packageUri)
+                }
+            "battery" ->
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)
+            else -> appDetailsIntent(packageUri)
+        }
+        try {
+            startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                startActivity(appDetailsIntent(packageUri))
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun appDetailsIntent(packageUri: Uri): Intent =
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
 
     private fun transcodeAudio(inputPath: String, outputPath: String, gain: Float): String {
         val decoded = decodeToPcm(inputPath, gain)
