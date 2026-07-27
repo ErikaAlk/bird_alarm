@@ -53,7 +53,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **下载卡顿**：`transcodeAudio` 的 MethodChannel 回调默认在 Android 主线程，必须在后台 `Executor` 跑、用 `mainHandler` + `isDestroyed` 守卫回投 `result`（否则 UI 卡死 / 引擎销毁后崩）。
 - **响铃通知必须先定鸟再建通知**：`ring()` 里先 `NativeAlarmPlayer.ensureRingingAsset()` 再 `buildNotification`，否则通知里鸟名会回退成"鸟鸣"。
 - **节假日数据在线获取**：`ChinaHolidayData` 拉 `https://timor.tech/api/holiday/year/{年}`（每项 `date` + `holiday` 布尔），按年缓存、每周刷新，离线回退 `ChinaWorkdayCalendar` 内置的 2026 表。`isWorkday/isHoliday` 优先用在线数据。内置表只到 2026，跨年靠在线。
-- **Live Updates（提级通知）**：用 extra 字符串 `android.requestPromotedOngoing`（不依赖 compileSdk 36 符号），在"即将响铃"倒计时、"正在响铃"和"下载进度"上提级；守护态通知是普通通知、且无关闭键（避免误点）。
+- **Live Updates（提级通知）**：用 extra 字符串 `android.requestPromotedOngoing`（不依赖 compileSdk 36 符号），在"即将响铃"倒计时、"正在响铃"和"下载进度"上提级；守护态通知是普通通知、且无关闭键（避免误点）。下载进度额外在 `SDK_INT >= 36` 时调 `setShortCriticalText("42%")` 让状态栏胶囊显示百分比（该符号需 compileSdk 36，已实测能编译）。
 - **Flutter 3.44 编译**：`ThemeData.cardTheme` 用 `CardThemeData`（不是 `CardTheme`）。
 - **深色模式**：`AppSettings.themeMode` 三态（跟随系统 / 浅色 / 深色），在设置页切换；`BirdAlarmApp` 用 `AnimatedBuilder(animation: appSettings)` 包住 `MaterialApp`，`main()` 里先 `await appSettings.load()` 再 `runApp`（否则会先按系统渲染一帧再跳）。报时鸟卡片恒为浅色，其内文字用**固定深色**而非主题色（否则深色下看不清）；卡通鸟/日出渐变插画保留原色。
 - **响铃设置必须落到原生 prefs**：响铃发生在原生侧、那一刻 App 可能没在跑，所以渐响这类设置由 `_syncSoundSettings()` 经 `updateSoundSettings` 写进 `bird_alarm_native`，**不要指望响铃时回头问 Flutter 要**。
