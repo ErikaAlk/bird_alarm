@@ -64,6 +64,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   1. **iNaturalist** `/v1/observations?taxon_name=&quality_grade=research&order_by=votes&photo_license=cc0,cc-by,…`，取首张照片，URL 里 `square.` 换成 `medium.`（约 500px）。**必须带 `photo_license` 过滤**——票数最高的照片经常是 All rights reserved，直接用不合适（Birdaholic 的实现没有过滤这一步）。
   2. 退到 **Wikimedia Commons** 物种分类 `generator=categorymembers&gcmtitle=Category:{学名}`，取 640px `thumburl`，署名从 `extmetadata.Artist`（是 HTML，要扒成纯文本）+ `LicenseShortName` 拼。
   - 结果（含「查过、确实没有」= 空字符串）写进 SharedPreferences，同一只鸟只查一次；取不到就用卡通鸟占位，卡片尺寸不变。
+  - **「查失败」和「确实没有」必须分开**（`BirdPhotoStatus.failed` / `.none`）：失败**不写缓存**、下次重试；「确实没有」写一条 7 天过期的记录。早期版本把两者都记成空字符串，结果第一次没网之后照片永远出不来。
+  - **图片自己下载到本地再显示**（`BirdPhotos.imageFile`，按学名一个文件）：`Image.network` 没有超时，手机上 CDN 卡住会一直转、看着就是「图加载不出来」；自己下能设超时(25s)、能缓存、能明确报失败并支持点一下重试。
   - **署名不能省**：CC BY / BY-NC 要求标作者与许可证，卡片右下角那行就是干这个的。
 - **列表项别用左滑手势**：整页要留给 `PageView` 左右滑动切 Tab，闹钟卡片再做「左滑删除」会抢手势（手指落在卡片上一划就变成拖删除条，页翻不动）。删除走**长按卡片**或编辑弹窗里的删除按钮，两处共用 `showDeleteAlarmDialog`。
 - **开关一律用 Material `Switch`**：用户明确不要「安卓苹果缝合」，`CupertinoSwitch` 别再回来。大标题、悬浮底栏、圆角卡片、时间滚轮这些 iOS 味的保留，开关跟系统走。

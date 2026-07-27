@@ -3173,6 +3173,8 @@ class _DailyBirdCard extends StatefulWidget {
 
 class _DailyBirdCardState extends State<_DailyBirdCard> {
   BirdPhoto? _photo;
+  File? _photoFile;
+  BirdPhotoStatus _photoStatus = BirdPhotoStatus.failed;
   bool _loadingPhoto = true;
 
   @override
@@ -3188,12 +3190,39 @@ class _DailyBirdCardState extends State<_DailyBirdCard> {
     if (oldWidget.bird.sci != widget.bird.sci) _loadPhoto();
   }
 
-  Future<void> _loadPhoto() async {
-    setState(() => _loadingPhoto = true);
-    final photo = await BirdPhotos.forSpecies(widget.bird.sci);
+  /// 查照片 + 把图下到本地。两步都可能失败，失败会明确显示出来并支持点一下重试，
+  /// 而不是永远停在占位图上（这是上一版的毛病）。
+  Future<void> _loadPhoto({bool forceRefresh = false}) async {
+    if (mounted) {
+      setState(() {
+        _loadingPhoto = true;
+        if (forceRefresh) {
+          _photo = null;
+          _photoFile = null;
+        }
+      });
+    }
+    final result = await BirdPhotos.forSpecies(
+      widget.bird.sci,
+      forceRefresh: forceRefresh,
+    );
+    final file =
+        result.photo == null
+            ? null
+            : await BirdPhotos.imageFile(
+              widget.bird.sci,
+              result.photo!,
+              forceRefresh: forceRefresh,
+            );
     if (!mounted) return;
     setState(() {
-      _photo = photo;
+      _photo = result.photo;
+      _photoFile = file;
+      // 查到了图但下不下来，也算失败（可重试），不然又是「永远转圈」。
+      _photoStatus =
+          result.status == BirdPhotoStatus.found && file == null
+              ? BirdPhotoStatus.failed
+              : result.status;
       _loadingPhoto = false;
     });
   }
@@ -3226,20 +3255,22 @@ class _DailyBirdCardState extends State<_DailyBirdCard> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                if (photo != null)
-                  Image.network(
-                    photo.url,
+                if (_photoFile != null)
+                  Image.file(
+                    _photoFile!,
                     fit: BoxFit.cover,
-                    loadingBuilder:
-                        (context, child, progress) =>
-                            progress == null
-                                ? child
-                                : const _PhotoPlaceholder(),
                     errorBuilder:
-                        (context, error, stack) => const _PhotoPlaceholder(),
+                        (context, error, stack) => _PhotoPlaceholder(
+                          status: BirdPhotoStatus.failed,
+                          onRetry: () => _loadPhoto(forceRefresh: true),
+                        ),
                   )
                 else
-                  _PhotoPlaceholder(spinning: _loadingPhoto),
+                  _PhotoPlaceholder(
+                    loading: _loadingPhoto,
+                    status: _photoStatus,
+                    onRetry: () => _loadPhoto(forceRefresh: true),
+                  ),
                 // 图片下半部压暗，保证压在上面的鸟名读得清（照片亮暗不可控）。
                 const DecoratedBox(
                   decoration: BoxDecoration(
@@ -3354,7 +3385,12 @@ class _DailyBirdCardState extends State<_DailyBirdCard> {
                 // 照片署名：CC 许可证要求标出作者与协议，别省。
                 Expanded(
                   child: Text(
-                    photo?.attribution ?? (_loadingPhoto ? '正在找照片…' : '暂无照片'),
+                    photo?.attribution ??
+                        (_loadingPhoto
+                            ? '正在找照片…'
+                            : (_photoStatus == BirdPhotoStatus.failed
+                                ? '照片加载失败'
+                                : '暂无照片')),
                     textAlign: TextAlign.right,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -3381,35 +3417,62 @@ class _DailyBirdCardState extends State<_DailyBirdCard> {
   );
 }
 
-/// 没照片（还在找 / 找不到 / 加载失败）时的占位：半透明底 + 那只卡通鸟，
-/// 尺寸与真图一致，卡片不会忽大忽小。
+/// 没照片时的占位：半透明底 + 那只卡通鸟，尺寸与真图一致，卡片不会忽大忽小。
+/// **失败要说出来并且能点一下重试**——只画一只卡通鸟的话，用户会以为图还在加载，
+/// 干等十几分钟也等不到（上一版就是这样）。
 class _PhotoPlaceholder extends StatelessWidget {
-  final bool spinning;
+  final bool loading;
+  final BirdPhotoStatus status;
+  final VoidCallback? onRetry;
 
-  const _PhotoPlaceholder({this.spinning = false});
+  const _PhotoPlaceholder({
+    this.loading = false,
+    this.status = BirdPhotoStatus.none,
+    this.onRetry,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
+    final failed = !loading && status == BirdPhotoStatus.failed;
+    return Material(
       color: Colors.white.withValues(alpha: 0.10),
-      child: Center(
-        child:
-            spinning
-                ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white70,
+      child: InkWell(
+        onTap: failed ? onRetry : null,
+        child: Center(
+          child:
+              loading
+                  ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white70,
+                    ),
+                  )
+                  : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 96,
+                        height: 96,
+                        child: CustomPaint(
+                          painter: const _CartoonClockBirdPainter(dark: true),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        failed ? '照片没加载出来，点一下重试' : '这只鸟暂时没有可用照片',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withValues(alpha: 0.85),
+                          shadows: const [
+                            Shadow(blurRadius: 6, color: Color(0x99000000)),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                )
-                : const SizedBox(
-                  width: 120,
-                  height: 120,
-                  child: CustomPaint(
-                    painter: _CartoonClockBirdPainter(dark: true),
-                  ),
-                ),
+        ),
       ),
     );
   }
@@ -3650,47 +3713,159 @@ class BirdPhoto {
   Map<String, dynamic> toJson() => {'url': url, 'attribution': attribution};
 }
 
+/// 查照片的结果。**「查失败」和「确实没有这只鸟的照片」必须分开**——
+/// 早期版本把两者都当成「没有」写进缓存，于是第一次没网就永远不再重试、图再也出不来。
+enum BirdPhotoStatus { found, none, failed }
+
+class BirdPhotoResult {
+  final BirdPhotoStatus status;
+  final BirdPhoto? photo;
+
+  const BirdPhotoResult(this.status, [this.photo]);
+}
+
 /// 按学名找一张鸟的照片。参考原作者的 Birdaholic（同一个人写的鸟类闪卡 App）：
 /// 先问 **iNaturalist**（research-grade 观察记录，按点赞排序），没有再退到
 /// **Wikimedia Commons** 的物种分类。两个都是公开接口，不需要 key。
 ///
-/// 与 Birdaholic 的实现有一点不同：这里**只取 CC 授权的照片**（`photo_license` 参数）。
-/// iNaturalist 上票数最高的往往是 "All rights reserved"，直接拿来显示不合适。
-///
-/// 查询结果（含「查过、确实没有」）都写进 SharedPreferences，同一只鸟只查一次——
-/// 每天只换一只鸟，没必要每次打开都发请求。
+/// 与 Birdaholic 的实现有两点不同：
+/// 1. 只取 **CC 授权**的照片（`photo_license` 参数）——iNaturalist 上票数最高的
+///    往往是 "All rights reserved"，直接拿来显示不合适。
+/// 2. 查到之后**把图片本身也下载到本地**，下次直接读文件：手机网络下 CDN 可能很慢，
+///    而 `Image.network` 没有超时、卡住就一直转，只能自己下、自己设超时。
 class BirdPhotos {
   static const _prefix = 'bird_photo_';
   // 只要 CC 授权（含 CC0）；这串会作为 photo_license 参数发给 iNaturalist。
   static const _ccLicenses =
       'cc0,cc-by,cc-by-nc,cc-by-sa,cc-by-nc-sa,cc-by-nd,cc-by-nc-nd';
-  static final Map<String, BirdPhoto?> _memory = {};
+  // 「这只鸟确实没有照片」的结论也别记一辈子：物种照片会陆续被人补上。
+  static const _negativeTtlMillis = 7 * 24 * 60 * 60 * 1000;
+  static const _apiTimeout = Duration(seconds: 12);
+  static const _imageTimeout = Duration(seconds: 25);
+  static final Map<String, BirdPhoto> _memory = {};
 
-  static Future<BirdPhoto?> forSpecies(String sciName) async {
-    if (sciName.isEmpty) return null;
-    if (_memory.containsKey(sciName)) return _memory[sciName];
-    final prefs = await SharedPreferences.getInstance();
-    final cached = prefs.getString('$_prefix$sciName');
-    if (cached != null) {
-      // 空字符串 = 之前查过、确实没有图，别再反复去问。
-      final photo =
-          cached.isEmpty
-              ? null
-              : BirdPhoto.fromJson(jsonDecode(cached) as Map<String, dynamic>);
-      _memory[sciName] = photo;
-      return photo;
+  /// 只给测试用：清掉进程内的那层缓存，好让每个用例从干净状态开始。
+  @visibleForTesting
+  static void debugClearMemoryCache() => _memory.clear();
+
+  /// 查这只鸟的照片。命中缓存直接返回；查询失败**不写缓存**，下次会重试。
+  static Future<BirdPhotoResult> forSpecies(
+    String sciName, {
+    http.Client? client,
+    bool forceRefresh = false,
+  }) async {
+    if (sciName.isEmpty) return const BirdPhotoResult(BirdPhotoStatus.none);
+    if (!forceRefresh && _memory.containsKey(sciName)) {
+      return BirdPhotoResult(BirdPhotoStatus.found, _memory[sciName]);
     }
-    final photo =
-        await _fromINaturalist(sciName) ?? await _fromWikimedia(sciName);
-    _memory[sciName] = photo;
-    await prefs.setString(
-      '$_prefix$sciName',
-      photo == null ? '' : jsonEncode(photo.toJson()),
-    );
-    return photo;
+    final prefs = await SharedPreferences.getInstance();
+    final key = '$_prefix$sciName';
+    if (forceRefresh) {
+      _memory.remove(sciName);
+      await prefs.remove(key);
+    } else {
+      final cached = _readCache(prefs, key);
+      if (cached != null) {
+        if (cached.photo != null) _memory[sciName] = cached.photo!;
+        return cached;
+      }
+    }
+
+    final http.Client httpClient = client ?? http.Client();
+    try {
+      final fromINaturalist = await _fromINaturalist(sciName, httpClient);
+      var photo = fromINaturalist.photo;
+      var failed = fromINaturalist.status == BirdPhotoStatus.failed;
+      if (photo == null) {
+        final fromCommons = await _fromWikimedia(sciName, httpClient);
+        photo = fromCommons.photo;
+        failed = failed || fromCommons.status == BirdPhotoStatus.failed;
+      }
+      if (photo != null) {
+        _memory[sciName] = photo;
+        await prefs.setString(
+          key,
+          jsonEncode({...photo.toJson(), 'ts': _nowMillis()}),
+        );
+        return BirdPhotoResult(BirdPhotoStatus.found, photo);
+      }
+      // 两个来源都正常应答、就是没有可用的图：记一条会过期的「没有」，别每次都重查。
+      if (!failed) {
+        await prefs.setString(
+          key,
+          jsonEncode({'none': true, 'ts': _nowMillis()}),
+        );
+        return const BirdPhotoResult(BirdPhotoStatus.none);
+      }
+      // 网络失败：**什么都不写**，下次重试。
+      return const BirdPhotoResult(BirdPhotoStatus.failed);
+    } finally {
+      if (client == null) httpClient.close();
+    }
   }
 
-  static Future<BirdPhoto?> _fromINaturalist(String sciName) async {
+  static BirdPhotoResult? _readCache(SharedPreferences prefs, String key) {
+    final raw = prefs.getString(key);
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final url = data['url'] as String?;
+      if (url != null && url.isNotEmpty) {
+        return BirdPhotoResult(BirdPhotoStatus.found, BirdPhoto.fromJson(data));
+      }
+      final ts = data['ts'] as int? ?? 0;
+      if (_nowMillis() - ts < _negativeTtlMillis) {
+        return const BirdPhotoResult(BirdPhotoStatus.none);
+      }
+    } catch (_) {
+      // 缓存坏了当没有，重新查一次。
+    }
+    return null;
+  }
+
+  static int _nowMillis() => DateTime.now().millisecondsSinceEpoch;
+
+  /// 把图片下到本地再显示。`Image.network` 没有超时，CDN 卡住时会一直转圈、
+  /// 界面上看着就是「图永远加载不出来」；自己下就能设超时、失败也能明确报出来。
+  /// 下过的图留在本地，之后打开秒出、离线也有。
+  static Future<File?> imageFile(
+    String sciName,
+    BirdPhoto photo, {
+    http.Client? client,
+    bool forceRefresh = false,
+  }) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      // 一个物种存一张，文件名就用学名，换鸟时不会越堆越多。
+      final file = File(
+        '${dir.path}/bird_photos/${_safeFileName(sciName)}.img',
+      );
+      // 手动重试时把上次下坏的文件删掉，否则会一直读到那个坏文件。
+      if (forceRefresh && await file.exists()) await file.delete();
+      if (await file.exists() && await file.length() > 0) return file;
+      final http.Client httpClient = client ?? http.Client();
+      try {
+        final response = await httpClient
+            .get(Uri.parse(photo.url))
+            .timeout(_imageTimeout);
+        if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+          return null;
+        }
+        await file.parent.create(recursive: true);
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+        return file;
+      } finally {
+        if (client == null) httpClient.close();
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<BirdPhotoResult> _fromINaturalist(
+    String sciName,
+    http.Client client,
+  ) async {
     try {
       final uri = Uri.https('api.inaturalist.org', '/v1/observations', {
         'taxon_name': sciName,
@@ -3700,8 +3875,10 @@ class BirdPhotos {
         'order_by': 'votes',
         'per_page': '5',
       });
-      final response = await http.get(uri).timeout(const Duration(seconds: 8));
-      if (response.statusCode != 200) return null;
+      final response = await client.get(uri).timeout(_apiTimeout);
+      if (response.statusCode != 200) {
+        return const BirdPhotoResult(BirdPhotoStatus.failed);
+      }
       final data =
           jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
       for (final item in (data['results'] as List<dynamic>? ?? const [])) {
@@ -3714,28 +3891,32 @@ class BirdPhotos {
         // 没有许可证 = 保留所有权利，跳过（photo_license 已经筛过一道，这里再兜一层）。
         if (rawUrl.isEmpty || license.isEmpty) continue;
         final user = observation['user'] as Map<String, dynamic>?;
-        final author =
-            ((user?['name'] as String?)?.trim().isNotEmpty == true
-                    ? user!['name'] as String
-                    : user?['login'] as String? ?? '')
-                .trim();
-        return BirdPhoto(
-          // 接口给的是 square（75px）缩略图，换成 medium（约 500px）。
-          url: rawUrl.replaceAll('square.', 'medium.'),
-          attribution: [
-            'iNaturalist',
-            if (author.isNotEmpty) author,
-            license.toUpperCase(),
-          ].join(' · '),
+        final name = (user?['name'] as String? ?? '').trim();
+        final login = (user?['login'] as String? ?? '').trim();
+        final author = name.isNotEmpty ? name : login;
+        return BirdPhotoResult(
+          BirdPhotoStatus.found,
+          BirdPhoto(
+            // 接口给的是 square（75px）缩略图，换成 medium（约 500px）。
+            url: rawUrl.replaceAll('square.', 'medium.'),
+            attribution: [
+              'iNaturalist',
+              if (author.isNotEmpty) author,
+              license.toUpperCase(),
+            ].join(' · '),
+          ),
         );
       }
+      return const BirdPhotoResult(BirdPhotoStatus.none);
     } catch (_) {
-      // 离线或超时：交给下一个来源。
+      return const BirdPhotoResult(BirdPhotoStatus.failed);
     }
-    return null;
   }
 
-  static Future<BirdPhoto?> _fromWikimedia(String sciName) async {
+  static Future<BirdPhotoResult> _fromWikimedia(
+    String sciName,
+    http.Client client,
+  ) async {
     try {
       // Commons 上每个物种一个分类（Category:Genus species），里面全是这种鸟的图。
       final uri = Uri.https('commons.wikimedia.org', '/w/api.php', {
@@ -3749,15 +3930,16 @@ class BirdPhotos {
         'iiurlwidth': '640',
         'format': 'json',
       });
-      final response = await http.get(uri).timeout(const Duration(seconds: 8));
-      if (response.statusCode != 200) return null;
+      final response = await client.get(uri).timeout(_apiTimeout);
+      if (response.statusCode != 200) {
+        return const BirdPhotoResult(BirdPhotoStatus.failed);
+      }
       final data =
           jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
       final pages =
           (data['query'] as Map<String, dynamic>?)?['pages']
               as Map<String, dynamic>?;
-      if (pages == null) return null;
-      for (final page in pages.values) {
+      for (final page in pages?.values ?? const []) {
         final infoList =
             (page as Map<String, dynamic>)['imageinfo'] as List<dynamic>?;
         if (infoList == null || infoList.isEmpty) continue;
@@ -3768,19 +3950,22 @@ class BirdPhotos {
         final meta = info['extmetadata'] as Map<String, dynamic>?;
         final author = _plainText(_metaValue(meta, 'Artist'));
         final license = _plainText(_metaValue(meta, 'LicenseShortName'));
-        return BirdPhoto(
-          url: url,
-          attribution: [
-            'Wikimedia Commons',
-            if (author.isNotEmpty) author,
-            if (license.isNotEmpty) license,
-          ].join(' · '),
+        return BirdPhotoResult(
+          BirdPhotoStatus.found,
+          BirdPhoto(
+            url: url,
+            attribution: [
+              'Wikimedia Commons',
+              if (author.isNotEmpty) author,
+              if (license.isNotEmpty) license,
+            ].join(' · '),
+          ),
         );
       }
+      return const BirdPhotoResult(BirdPhotoStatus.none);
     } catch (_) {
-      // 两个来源都拿不到就用占位图。
+      return const BirdPhotoResult(BirdPhotoStatus.failed);
     }
-    return null;
   }
 
   static String _metaValue(Map<String, dynamic>? meta, String key) =>
