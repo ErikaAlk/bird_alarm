@@ -37,6 +37,10 @@ object DownloadNotifier {
         }
         // 常驻 + 进度条的通知才有资格被提级成 Live Update；低版本上这个 extra 会被忽略。
         AlarmReceiver.requestPromotedOngoing(builder)
+        if (Build.VERSION.SDK_INT >= 36 && progress >= 0) {
+            // 状态栏胶囊上显示的极短文本（Live Update 的「一眼信息」），这里放百分比。
+            builder.setShortCriticalText("${progress.coerceIn(0, 100)}%")
+        }
         notificationManager.notify(NOTIFICATION_ID, builder.build())
     }
 
