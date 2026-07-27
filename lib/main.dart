@@ -3145,9 +3145,10 @@ class _LibraryPanel extends StatelessWidget {
   }
 }
 
-/// 「每日一鸟」卡片：当天固定的一只鸟 + 一张来自维基百科的照片，隔天自动换。
-/// 已经在音库里就能直接试听，没有就一键从 xeno-canto 下一条回来。
-class _DailyBirdCard extends StatelessWidget {
+/// 「每日一鸟」卡片：当天固定的一只鸟 + 一张大图（iNaturalist / Wikimedia Commons，
+/// 都是 CC 授权，卡片底部按许可证要求标出作者）。已经在音库里就能直接试听，
+/// 没有就一键从 xeno-canto 下一条回来。取不到图时退回渐变底 + 卡通鸟，尺寸不变。
+class _DailyBirdCard extends StatefulWidget {
   final BirdName bird;
   final BirdSound? sound;
   final bool downloading;
@@ -3167,12 +3168,45 @@ class _DailyBirdCard extends StatelessWidget {
   });
 
   @override
+  State<_DailyBirdCard> createState() => _DailyBirdCardState();
+}
+
+class _DailyBirdCardState extends State<_DailyBirdCard> {
+  BirdPhoto? _photo;
+  bool _loadingPhoto = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPhoto();
+  }
+
+  @override
+  void didUpdateWidget(_DailyBirdCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 过了零点换鸟时会走到这里。
+    if (oldWidget.bird.sci != widget.bird.sci) _loadPhoto();
+  }
+
+  Future<void> _loadPhoto() async {
+    setState(() => _loadingPhoto = true);
+    final photo = await BirdPhotos.forSpecies(widget.bird.sci);
+    if (!mounted) return;
+    setState(() {
+      _photo = photo;
+      _loadingPhoto = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final light = theme.brightness == Brightness.light;
-    final playable = sound?.playable == true;
+    final bird = widget.bird;
+    final playable = widget.sound?.playable == true;
+    final photo = _photo;
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         gradient: LinearGradient(
@@ -3185,224 +3219,196 @@ class _DailyBirdCard extends StatelessWidget {
         ),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.auto_awesome, size: 18, color: Colors.white70),
-              const SizedBox(width: 6),
-              Text(
-                '今天认识这只鸟',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.white.withValues(alpha: 0.85),
+          SizedBox(
+            height: 190,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (photo != null)
+                  Image.network(
+                    photo.url,
+                    fit: BoxFit.cover,
+                    loadingBuilder:
+                        (context, child, progress) =>
+                            progress == null
+                                ? child
+                                : const _PhotoPlaceholder(),
+                    errorBuilder:
+                        (context, error, stack) => const _PhotoPlaceholder(),
+                  )
+                else
+                  _PhotoPlaceholder(spinning: _loadingPhoto),
+                // 图片下半部压暗，保证压在上面的鸟名读得清（照片亮暗不可控）。
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.center,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.transparent, Color(0xB3000000)],
+                    ),
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _BirdPhoto(sciName: bird.sci, size: 104),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      bird.display,
-                      style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.5,
-                        height: 1.15,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '${bird.en}\n${bird.sci}',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        height: 1.4,
-                        color: Colors.white.withValues(alpha: 0.82),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              if (playable)
-                FilledButton.icon(
-                  onPressed: () => onPreview(sound!),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: const Color(0xFF11534D),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 10,
-                    ),
-                  ),
-                  icon: Icon(
-                    previewing ? Icons.pause : Icons.play_arrow,
-                    size: 20,
-                  ),
-                  label: Text(previewing ? '暂停' : '试听'),
-                )
-              else
-                FilledButton.icon(
-                  onPressed: downloading ? null : () => onDownload(bird),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: const Color(0xFF11534D),
-                    disabledBackgroundColor: Colors.white70,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 10,
-                    ),
-                  ),
-                  icon:
-                      downloading
-                          ? SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              value: progress,
-                              color: const Color(0xFF11534D),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.auto_awesome,
+                            size: 16,
+                            color: Colors.white,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '今天认识这只鸟',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: Colors.white.withValues(alpha: 0.9),
+                              shadows: const [
+                                Shadow(blurRadius: 6, color: Color(0x99000000)),
+                              ],
                             ),
-                          )
-                          : const Icon(Icons.download, size: 20),
-                  label: Text(
-                    downloading
-                        ? (progress == null
-                            ? '处理中…'
-                            : '${(progress! * 100).round()}%')
-                        : '下载这只鸟',
+                          ),
+                        ],
+                      ),
+                      const Spacer(),
+                      Text(
+                        bird.display,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                          color: Colors.white,
+                          shadows: [
+                            Shadow(blurRadius: 8, color: Color(0xB3000000)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${bird.en} · ${bird.sci}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withValues(alpha: 0.88),
+                          shadows: const [
+                            Shadow(blurRadius: 6, color: Color(0x99000000)),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              const SizedBox(width: 12),
-              // 来源说明放这儿：图片取自维基百科、鸟名取自 IOC 名录，不管这次有没有取到图都成立。
-              Expanded(
-                child: Text(
-                  '鸟名来自 IOC 名录\n图片来自维基百科',
-                  textAlign: TextAlign.right,
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    height: 1.3,
-                    color: Colors.white.withValues(alpha: 0.7),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+            child: Row(
+              children: [
+                if (playable)
+                  FilledButton.icon(
+                    onPressed: () => widget.onPreview(widget.sound!),
+                    style: _actionStyle,
+                    icon: Icon(
+                      widget.previewing ? Icons.pause : Icons.play_arrow,
+                      size: 20,
+                    ),
+                    label: Text(widget.previewing ? '暂停' : '试听'),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed:
+                        widget.downloading
+                            ? null
+                            : () => widget.onDownload(bird),
+                    style: _actionStyle,
+                    icon:
+                        widget.downloading
+                            ? SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                value: widget.progress,
+                                color: const Color(0xFF11534D),
+                              ),
+                            )
+                            : const Icon(Icons.download, size: 20),
+                    label: Text(
+                      widget.downloading
+                          ? (widget.progress == null
+                              ? '处理中…'
+                              : '${(widget.progress! * 100).round()}%')
+                          : '下载这只鸟',
+                    ),
+                  ),
+                const SizedBox(width: 12),
+                // 照片署名：CC 许可证要求标出作者与协议，别省。
+                Expanded(
+                  child: Text(
+                    photo?.attribution ?? (_loadingPhoto ? '正在找照片…' : '暂无照片'),
+                    textAlign: TextAlign.right,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      height: 1.3,
+                      color: Colors.white.withValues(alpha: 0.75),
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
     );
   }
+
+  static final ButtonStyle _actionStyle = FilledButton.styleFrom(
+    backgroundColor: Colors.white,
+    foregroundColor: const Color(0xFF11534D),
+    disabledBackgroundColor: Colors.white70,
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+  );
 }
 
-/// 每日一鸟的照片：按学名去维基百科取缩略图，取不到就画那只卡通鸟兜底。
-/// 结果（含「查无此鸟」）都缓存起来，同一只鸟一天只查一次。
-class _BirdPhoto extends StatefulWidget {
-  final String sciName;
-  final double size;
+/// 没照片（还在找 / 找不到 / 加载失败）时的占位：半透明底 + 那只卡通鸟，
+/// 尺寸与真图一致，卡片不会忽大忽小。
+class _PhotoPlaceholder extends StatelessWidget {
+  final bool spinning;
 
-  const _BirdPhoto({required this.sciName, required this.size});
-
-  @override
-  State<_BirdPhoto> createState() => _BirdPhotoState();
-}
-
-class _BirdPhotoState extends State<_BirdPhoto> {
-  String? _url;
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _resolve();
-  }
-
-  @override
-  void didUpdateWidget(_BirdPhoto oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // 过了零点换鸟时会走到这里。
-    if (oldWidget.sciName != widget.sciName) _resolve();
-  }
-
-  Future<void> _resolve() async {
-    setState(() => _loading = true);
-    final url = await BirdPhotos.thumbnailFor(widget.sciName);
-    if (!mounted) return;
-    setState(() {
-      _url = url;
-      _loading = false;
-    });
-  }
+  const _PhotoPlaceholder({this.spinning = false});
 
   @override
   Widget build(BuildContext context) {
-    final url = _url;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        width: widget.size,
-        height: widget.size,
-        color: Colors.white.withValues(alpha: 0.16),
+    return ColoredBox(
+      color: Colors.white.withValues(alpha: 0.10),
+      child: Center(
         child:
-            url == null
-                ? Center(
-                  child:
-                      _loading
-                          ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white70,
-                            ),
-                          )
-                          : SizedBox(
-                            width: widget.size * 0.8,
-                            height: widget.size * 0.8,
-                            child: CustomPaint(
-                              painter: const _CartoonClockBirdPainter(
-                                dark: true,
-                              ),
-                            ),
-                          ),
+            spinning
+                ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white70,
+                  ),
                 )
-                : Image.network(
-                  url,
-                  fit: BoxFit.cover,
-                  // 加载中/失败都退回同一个占位，别让卡片忽大忽小。
-                  loadingBuilder:
-                      (context, child, progress) =>
-                          progress == null
-                              ? child
-                              : const Center(
-                                child: SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white70,
-                                  ),
-                                ),
-                              ),
-                  errorBuilder:
-                      (context, error, stack) => Center(
-                        child: Icon(
-                          Icons.image_not_supported_outlined,
-                          color: Colors.white.withValues(alpha: 0.7),
-                        ),
-                      ),
+                : const SizedBox(
+                  width: 120,
+                  height: 120,
+                  child: CustomPaint(
+                    painter: _CartoonClockBirdPainter(dark: true),
+                  ),
                 ),
       ),
     );
@@ -3628,62 +3634,170 @@ DailyBird pickDailyBird({
   );
 }
 
-/// 每日一鸟的照片：按学名问维基百科要一张缩略图（公开接口，不需要 key）。
-/// 先试中文站，没有再试英文站；查到的 URL（以及「查无此鸟」）都存进 SharedPreferences，
-/// 同一只鸟只查一次——每天只换一只鸟，没必要每次打开都发请求。
+/// 一张鸟的照片：图片地址 + 署名（作者与许可证）。
+/// 用的都是 CC 授权的图，**署名是许可证要求的**，别为了好看把它省掉。
+class BirdPhoto {
+  final String url;
+  final String attribution;
+
+  const BirdPhoto({required this.url, required this.attribution});
+
+  factory BirdPhoto.fromJson(Map<String, dynamic> json) => BirdPhoto(
+    url: json['url'] as String? ?? '',
+    attribution: json['attribution'] as String? ?? '',
+  );
+
+  Map<String, dynamic> toJson() => {'url': url, 'attribution': attribution};
+}
+
+/// 按学名找一张鸟的照片。参考原作者的 Birdaholic（同一个人写的鸟类闪卡 App）：
+/// 先问 **iNaturalist**（research-grade 观察记录，按点赞排序），没有再退到
+/// **Wikimedia Commons** 的物种分类。两个都是公开接口，不需要 key。
+///
+/// 与 Birdaholic 的实现有一点不同：这里**只取 CC 授权的照片**（`photo_license` 参数）。
+/// iNaturalist 上票数最高的往往是 "All rights reserved"，直接拿来显示不合适。
+///
+/// 查询结果（含「查过、确实没有」）都写进 SharedPreferences，同一只鸟只查一次——
+/// 每天只换一只鸟，没必要每次打开都发请求。
 class BirdPhotos {
   static const _prefix = 'bird_photo_';
-  static final Map<String, String?> _memory = {};
+  // 只要 CC 授权（含 CC0）；这串会作为 photo_license 参数发给 iNaturalist。
+  static const _ccLicenses =
+      'cc0,cc-by,cc-by-nc,cc-by-sa,cc-by-nc-sa,cc-by-nd,cc-by-nc-nd';
+  static final Map<String, BirdPhoto?> _memory = {};
 
-  static Future<String?> thumbnailFor(String sciName) async {
+  static Future<BirdPhoto?> forSpecies(String sciName) async {
     if (sciName.isEmpty) return null;
     if (_memory.containsKey(sciName)) return _memory[sciName];
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getString('$_prefix$sciName');
     if (cached != null) {
       // 空字符串 = 之前查过、确实没有图，别再反复去问。
-      final url = cached.isEmpty ? null : cached;
-      _memory[sciName] = url;
-      return url;
+      final photo =
+          cached.isEmpty
+              ? null
+              : BirdPhoto.fromJson(jsonDecode(cached) as Map<String, dynamic>);
+      _memory[sciName] = photo;
+      return photo;
     }
-    String? url;
-    for (final host in const ['zh.wikipedia.org', 'en.wikipedia.org']) {
-      url = await _fetchThumbnail(host, sciName);
-      if (url != null) break;
-    }
-    _memory[sciName] = url;
-    await prefs.setString('$_prefix$sciName', url ?? '');
-    return url;
+    final photo =
+        await _fromINaturalist(sciName) ?? await _fromWikimedia(sciName);
+    _memory[sciName] = photo;
+    await prefs.setString(
+      '$_prefix$sciName',
+      photo == null ? '' : jsonEncode(photo.toJson()),
+    );
+    return photo;
   }
 
-  static Future<String?> _fetchThumbnail(String host, String sciName) async {
+  static Future<BirdPhoto?> _fromINaturalist(String sciName) async {
     try {
-      final title = Uri.encodeComponent(sciName.replaceAll(' ', '_'));
-      final response = await http
-          .get(
-            Uri.parse('https://$host/api/rest_v1/page/summary/$title'),
-            headers: const {'accept': 'application/json'},
-          )
-          .timeout(const Duration(seconds: 8));
+      final uri = Uri.https('api.inaturalist.org', '/v1/observations', {
+        'taxon_name': sciName,
+        'photos': 'true',
+        'quality_grade': 'research',
+        'photo_license': _ccLicenses,
+        'order_by': 'votes',
+        'per_page': '5',
+      });
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
       if (response.statusCode != 200) return null;
       final data =
           jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
-      final thumbnail = data['thumbnail'];
-      if (thumbnail is Map && thumbnail['source'] is String) {
-        return thumbnail['source'] as String;
+      for (final item in (data['results'] as List<dynamic>? ?? const [])) {
+        final observation = item as Map<String, dynamic>;
+        final photos = observation['photos'] as List<dynamic>? ?? const [];
+        if (photos.isEmpty) continue;
+        final photo = photos.first as Map<String, dynamic>;
+        final rawUrl = photo['url'] as String? ?? '';
+        final license = (photo['license_code'] as String? ?? '').trim();
+        // 没有许可证 = 保留所有权利，跳过（photo_license 已经筛过一道，这里再兜一层）。
+        if (rawUrl.isEmpty || license.isEmpty) continue;
+        final user = observation['user'] as Map<String, dynamic>?;
+        final author =
+            ((user?['name'] as String?)?.trim().isNotEmpty == true
+                    ? user!['name'] as String
+                    : user?['login'] as String? ?? '')
+                .trim();
+        return BirdPhoto(
+          // 接口给的是 square（75px）缩略图，换成 medium（约 500px）。
+          url: rawUrl.replaceAll('square.', 'medium.'),
+          attribution: [
+            'iNaturalist',
+            if (author.isNotEmpty) author,
+            license.toUpperCase(),
+          ].join(' · '),
+        );
       }
     } catch (_) {
-      // 离线或超时：这次没图，占位图顶上。
+      // 离线或超时：交给下一个来源。
     }
     return null;
   }
-}
 
-extension _FirstOrNull<T> on Iterable<T> {
-  T? get firstOrNull {
-    final iterator = this.iterator;
-    if (iterator.moveNext()) return iterator.current;
+  static Future<BirdPhoto?> _fromWikimedia(String sciName) async {
+    try {
+      // Commons 上每个物种一个分类（Category:Genus species），里面全是这种鸟的图。
+      final uri = Uri.https('commons.wikimedia.org', '/w/api.php', {
+        'action': 'query',
+        'generator': 'categorymembers',
+        'gcmtitle': 'Category:${sciName.replaceAll(' ', '_')}',
+        'gcmtype': 'file',
+        'gcmlimit': '5',
+        'prop': 'imageinfo',
+        'iiprop': 'url|mime|extmetadata',
+        'iiurlwidth': '640',
+        'format': 'json',
+      });
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return null;
+      final data =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final pages =
+          (data['query'] as Map<String, dynamic>?)?['pages']
+              as Map<String, dynamic>?;
+      if (pages == null) return null;
+      for (final page in pages.values) {
+        final infoList =
+            (page as Map<String, dynamic>)['imageinfo'] as List<dynamic>?;
+        if (infoList == null || infoList.isEmpty) continue;
+        final info = infoList.first as Map<String, dynamic>;
+        if (!(info['mime'] as String? ?? '').startsWith('image/')) continue;
+        final url = info['thumburl'] as String? ?? info['url'] as String? ?? '';
+        if (url.isEmpty) continue;
+        final meta = info['extmetadata'] as Map<String, dynamic>?;
+        final author = _plainText(_metaValue(meta, 'Artist'));
+        final license = _plainText(_metaValue(meta, 'LicenseShortName'));
+        return BirdPhoto(
+          url: url,
+          attribution: [
+            'Wikimedia Commons',
+            if (author.isNotEmpty) author,
+            if (license.isNotEmpty) license,
+          ].join(' · '),
+        );
+      }
+    } catch (_) {
+      // 两个来源都拿不到就用占位图。
+    }
     return null;
+  }
+
+  static String _metaValue(Map<String, dynamic>? meta, String key) =>
+      ((meta?[key] as Map<String, dynamic>?)?['value'] as String?) ?? '';
+
+  // Commons 的 Artist 字段是一段 HTML（常带链接），扒成纯文本再显示。
+  static String _plainText(String html) {
+    final text =
+        html
+            .replaceAll(RegExp(r'<[^>]*>'), ' ')
+            .replaceAll('&amp;', '&')
+            .replaceAll('&quot;', '"')
+            .replaceAll('&#039;', "'")
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+    // 太长的署名会把卡片撑爆，截断但保留可辨认的部分。
+    return text.length > 40 ? '${text.substring(0, 40)}…' : text;
   }
 }
 
@@ -3808,6 +3922,11 @@ class _AboutPage extends StatelessWidget {
                 const Text('笑翠鸟 · XC1086676', style: TextStyle(fontSize: 13)),
                 const Text('绿啸冠鸫 · XC1088985', style: TextStyle(fontSize: 13)),
                 const Text('噪鹃 · XC1101779', style: TextStyle(fontSize: 13)),
+                const SizedBox(height: 8),
+                const SizedBox(height: 10),
+                const Text(
+                  '「每日一鸟」的照片来自 iNaturalist 与 Wikimedia Commons，只取 CC 授权的图片，作者与许可证标在卡片上。鸟种名录来自 IOC / AviList。',
+                ),
                 const SizedBox(height: 8),
                 Text(
                   '所有录音均遵循 xeno-canto Creative Commons 授权协议使用。',

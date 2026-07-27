@@ -60,7 +60,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **响铃设置必须落到原生 prefs**：响铃发生在原生侧、那一刻 App 可能没在跑，所以渐响这类设置由 `_syncSoundSettings()` 经 `updateSoundSettings` 写进 `bird_alarm_native`，**不要指望响铃时回头问 Flutter 要**。
 - **双击手势别用 `onDoubleTap`**：`GestureDetector.onDoubleTap` 会让**单击**一直等到双击超时（~300ms）才生效，点一下顿一下。星期格与分段控件都改成自己按时间戳判双击（`_kDoubleTapWindow`），单击零延迟。判「已全选则清空」要用**第一下点击之前**的选择（`_daysBeforeLastTap`），否则全选时永远清不掉。
 - **鸟鸣库不要再放「不搜也显示的名录列表」**：名录有一万多条，按顺序列前 30 条永远是那几只鸵鸟，用户会以为界面卡死了。`_filteredBirdNames()` 在搜索词为空时**返回空列表**，搜索框放页面最上方。
-- **每日一鸟的照片**：`BirdPhotos.thumbnailFor(学名)` 走维基百科公开接口 `https://{zh|en}.wikipedia.org/api/rest_v1/page/summary/{学名}`（不需要 key，先中文站后英文站），取 `thumbnail.source`（330px）。结果存 SharedPreferences，**空字符串表示「查过、确实没有图」**，避免每次打开都重查；取不到就用卡通鸟占位。
+- **每日一鸟的照片**：`BirdPhotos.forSpecies(学名)`，两个来源都不需要 key（做法参考原作者的另一个项目 [Birdaholic](https://github.com/oastwy/Birdaholic) 的 `inaturalist_service` / `wikimedia_service`）：
+  1. **iNaturalist** `/v1/observations?taxon_name=&quality_grade=research&order_by=votes&photo_license=cc0,cc-by,…`，取首张照片，URL 里 `square.` 换成 `medium.`（约 500px）。**必须带 `photo_license` 过滤**——票数最高的照片经常是 All rights reserved，直接用不合适（Birdaholic 的实现没有过滤这一步）。
+  2. 退到 **Wikimedia Commons** 物种分类 `generator=categorymembers&gcmtitle=Category:{学名}`，取 640px `thumburl`，署名从 `extmetadata.Artist`（是 HTML，要扒成纯文本）+ `LicenseShortName` 拼。
+  - 结果（含「查过、确实没有」= 空字符串）写进 SharedPreferences，同一只鸟只查一次；取不到就用卡通鸟占位，卡片尺寸不变。
+  - **署名不能省**：CC BY / BY-NC 要求标作者与许可证，卡片右下角那行就是干这个的。
 - **列表项别用左滑手势**：整页要留给 `PageView` 左右滑动切 Tab，闹钟卡片再做「左滑删除」会抢手势（手指落在卡片上一划就变成拖删除条，页翻不动）。删除走**长按卡片**或编辑弹窗里的删除按钮，两处共用 `showDeleteAlarmDialog`。
 - **开关一律用 Material `Switch`**：用户明确不要「安卓苹果缝合」，`CupertinoSwitch` 别再回来。大标题、悬浮底栏、圆角卡片、时间滚轮这些 iOS 味的保留，开关跟系统走。
 - **「还有多久响铃」只在 App 内**：报时卡的倒计时由 `countdownText()` 按 `_clock` 每秒重算（只重建那一小块）；**不要**为它加常驻通知——通知里只保留响铃前 10 分钟那条倒计时。
