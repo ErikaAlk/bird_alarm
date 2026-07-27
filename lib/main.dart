@@ -921,6 +921,17 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     return pool;
   }
 
+  // 设置页的「检查闹钟权限」：打开自检面板，逐项列出状态。
+  // 以前这里直接调 _requestAlarmPermissions——权限都齐时它一个分支都不进、什么也不做，
+  // 用户点了没任何反应，看着像按钮坏了。
+  Future<void> _showPermissionCheck() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => const _PermissionCheckSheet(),
+    );
+  }
+
   Future<void> _requestAlarmPermissions() async {
     if (!Platform.isAndroid) return;
     try {
@@ -1472,7 +1483,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
                         if (mounted) setState(() {});
                       },
                       onTestAlarm: _testSystemAlarm,
-                      onCheckPermissions: _requestAlarmPermissions,
+                      onCheckPermissions: _showPermissionCheck,
                     ),
                   ),
                   const _KeepAlivePage(child: _AboutPage()),
@@ -4197,8 +4208,233 @@ class _SocialLinkTile extends StatelessWidget {
   }
 }
 
+/// 权限自检面板。以前设置页那个「检查闹钟权限」只在**缺**权限时才跳系统设置，
+/// 全授权了就一声不吭——按了没反应，跟坏了一样。现在改成把每一项的状态列出来，
+/// 缺哪项点哪项去开，全好了也明确告诉你「都齐了」。
+class _PermissionCheckSheet extends StatefulWidget {
+  const _PermissionCheckSheet();
+
+  @override
+  State<_PermissionCheckSheet> createState() => _PermissionCheckSheetState();
+}
+
+class _PermissionCheckSheetState extends State<_PermissionCheckSheet>
+    with WidgetsBindingObserver {
+  static const _items = <({String key, String title, String detail})>[
+    (key: 'notifications', title: '通知', detail: '响铃通知、倒计时、下载进度都要它'),
+    (key: 'fullScreenIntent', title: '全屏通知', detail: '锁屏到点直接弹出响铃页，而不是一条横幅'),
+    (key: 'exactAlarm', title: '精确闹钟', detail: '到点准时响，不被系统推迟'),
+    (key: 'battery', title: '后台不受限', detail: '省电策略不掐后台，整夜也能按时响'),
+  ];
+
+  Map<String, bool>? _status;
+  bool _checking = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _check();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 从系统设置页返回时自动重查，不用手动刷新。
+    if (state == AppLifecycleState.resumed) _check();
+  }
+
+  Future<void> _check() async {
+    if (mounted) setState(() => _checking = true);
+    Map<String, bool>? status;
+    try {
+      final raw = await _AlarmHomePageState._systemAlarmChannel
+          .invokeMethod<Map<dynamic, dynamic>>('checkAlarmPermissions');
+      if (raw != null) {
+        status = {
+          for (final entry in raw.entries)
+            entry.key.toString(): entry.value == true,
+        };
+      }
+    } catch (_) {
+      // 平台通道不可用（比如非 Android）：下面显示「查不到」。
+    }
+    if (!mounted) return;
+    setState(() {
+      _status = status;
+      _checking = false;
+    });
+  }
+
+  Future<void> _open(String type) async {
+    try {
+      await _AlarmHomePageState._systemAlarmChannel.invokeMethod<void>(
+        'openPermissionSetting',
+        {'type': type},
+      );
+    } catch (_) {
+      // 打不开就算了，下面还有「打开应用设置」兜底。
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final status = _status;
+    final missing =
+        status == null
+            ? -1
+            : _items.where((item) => status[item.key] != true).length;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text('权限自检', style: theme.textTheme.titleLarge),
+                const Spacer(),
+                if (_checking)
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  IconButton(
+                    tooltip: '重新检查',
+                    onPressed: _check,
+                    icon: const Icon(Icons.refresh),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              switch (missing) {
+                -1 => '查不到权限状态（这台设备可能不是 Android）。',
+                0 => '闹钟需要的权限都齐了。',
+                _ => '有 $missing 项还没开，点右边去开启。',
+              },
+              style: TextStyle(
+                fontSize: 13,
+                color:
+                    missing > 0
+                        ? theme.colorScheme.error
+                        : theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 14),
+            if (status != null)
+              _GroupedCard(
+                children: [
+                  for (final item in _items)
+                    _PermissionRow(
+                      title: item.title,
+                      detail: item.detail,
+                      granted: status[item.key] == true,
+                      onOpen: () => _open(item.key),
+                    ),
+                ],
+              ),
+            const SizedBox(height: 12),
+            Text(
+              '部分国产 ROM 还有「自启动」「后台弹出界面」「锁屏显示」等私有开关，系统不让 App 查询，'
+              '需要你在应用设置里手动确认一次。',
+              style: TextStyle(
+                fontSize: 12,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _open('appDetails'),
+                icon: const Icon(Icons.open_in_new, size: 18),
+                label: const Text('打开本应用的系统设置页'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PermissionRow extends StatelessWidget {
+  final String title;
+  final String detail;
+  final bool granted;
+  final VoidCallback onOpen;
+
+  const _PermissionRow({
+    required this.title,
+    required this.detail,
+    required this.granted,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+      child: Row(
+        children: [
+          Icon(
+            granted ? Icons.check_circle : Icons.error_outline,
+            size: 22,
+            color:
+                granted ? theme.colorScheme.primary : theme.colorScheme.error,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detail,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (granted)
+            Text(
+              '已开启',
+              style: TextStyle(
+                fontSize: 12.5,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            TextButton(onPressed: onOpen, child: const Text('去开启')),
+        ],
+      ),
+    );
+  }
+}
+
 /// 设置页：以前设置散在顶栏图标和弹窗里（只有一个 API Key），现在全部收进这一个 Tab——
-/// 外观、响铃渐响、xeno-canto Key、权限与自检都在这儿，按 iOS 分组列表排布。
+/// 外观、响铃渐响、xeno-canto Key、权限自检都在这儿，按 iOS 分组列表排布。
 class _SettingsTab extends StatefulWidget {
   final ValueChanged<int> onFadeInChanged;
   final VoidCallback onTestAlarm;
@@ -4435,7 +4671,7 @@ class _SettingsTabState extends State<_SettingsTab> {
             _SettingsRow(
               icon: Icons.verified_user_outlined,
               title: '检查闹钟权限',
-              subtitle: '精确闹钟、全屏通知、后台运行——缺哪个就跳去授权页',
+              subtitle: '逐项列出通知 / 全屏通知 / 精确闹钟 / 后台限制的状态',
               trailing: Icon(
                 Icons.chevron_right,
                 color: theme.colorScheme.onSurfaceVariant,

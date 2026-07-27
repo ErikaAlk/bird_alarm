@@ -67,6 +67,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - **「查失败」和「确实没有」必须分开**（`BirdPhotoStatus.failed` / `.none`）：失败**不写缓存**、下次重试；「确实没有」写一条 7 天过期的记录。早期版本把两者都记成空字符串，结果第一次没网之后照片永远出不来。
   - **图片自己下载到本地再显示**（`BirdPhotos.imageFile`，按学名一个文件）：`Image.network` 没有超时，手机上 CDN 卡住会一直转、看着就是「图加载不出来」；自己下能设超时(25s)、能缓存、能明确报失败并支持点一下重试。
   - **署名不能省**：CC BY / BY-NC 要求标作者与许可证，卡片右下角那行就是干这个的。
+- **权限自检要「看得见」**：`checkAlarmPermissions` 返回四项布尔（通知含 `areNotificationsEnabled`、全屏通知、精确闹钟、电池不受限），`openPermissionSetting(type)` 跳对应设置页、失败一律退回应用详情页。设置页那颗按钮开 `_PermissionCheckSheet`（`resumed` 时自动重查）。**别再让它「有问题才有反应」**——旧版权限齐全时什么都不做，用户以为按钮坏了。
 - **列表项别用左滑手势**：整页要留给 `PageView` 左右滑动切 Tab，闹钟卡片再做「左滑删除」会抢手势（手指落在卡片上一划就变成拖删除条，页翻不动）。删除走**长按卡片**或编辑弹窗里的删除按钮，两处共用 `showDeleteAlarmDialog`。
 - **开关一律用 Material `Switch`**：用户明确不要「安卓苹果缝合」，`CupertinoSwitch` 别再回来。大标题、悬浮底栏、圆角卡片、时间滚轮这些 iOS 味的保留，开关跟系统走。
 - **「还有多久响铃」只在 App 内**：报时卡的倒计时由 `countdownText()` 按 `_clock` 每秒重算（只重建那一小块）；**不要**为它加常驻通知——通知里只保留响铃前 10 分钟那条倒计时。
