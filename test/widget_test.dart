@@ -2,10 +2,15 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:bird_alarm/main.dart';
 
 void main() {
+  // 给 SharedPreferences 一份空的假数据，首页的 _load() 才能真正跑完
+  // （否则第一步就抛 MissingPluginException，鸟名表根本不会加载）。
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('Bird alarm home renders core controls', (
     WidgetTester tester,
   ) async {
@@ -60,9 +65,13 @@ void main() {
     await tester.pumpAndSettle();
 
     const days = ['一', '二', '三', '四', '五', '六', '日'];
-    Finder cell(String label) => find
-        .ancestor(of: find.text(label), matching: find.byType(AnimatedContainer))
-        .first;
+    Finder cell(String label) =>
+        find
+            .ancestor(
+              of: find.text(label),
+              matching: find.byType(AnimatedContainer),
+            )
+            .first;
     Color colorOf(String label) =>
         (tester.widget<AnimatedContainer>(cell(label)).decoration
                 as BoxDecoration)

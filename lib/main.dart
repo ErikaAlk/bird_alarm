@@ -120,16 +120,14 @@ ThemeData buildAppTheme(Brightness brightness) {
   ).copyWith(
     surface: light ? const Color(0xFFFFF5DF) : const Color(0xFF121214),
     surfaceContainerLowest: light ? Colors.white : const Color(0xFF1C1C1E),
-    surfaceContainerHighest: light
-        ? const Color(0xFFF3EAD3)
-        : const Color(0xFF2C2C2E),
+    surfaceContainerHighest:
+        light ? const Color(0xFFF3EAD3) : const Color(0xFF2C2C2E),
   );
   return ThemeData(
     colorScheme: scheme,
     useMaterial3: true,
-    scaffoldBackgroundColor: light
-        ? const Color(0xFFFFF5DF)
-        : const Color(0xFF121214),
+    scaffoldBackgroundColor:
+        light ? const Color(0xFFFFF5DF) : const Color(0xFF121214),
     splashFactory: InkSparkle.splashFactory,
     // 页面转场用 iOS 的横向推入（返回手势也一并有了）。
     pageTransitionsTheme: const PageTransitionsTheme(
@@ -139,7 +137,8 @@ ThemeData buildAppTheme(Brightness brightness) {
       },
     ),
     appBarTheme: AppBarTheme(
-      backgroundColor: light ? const Color(0xFFFFF5DF) : const Color(0xFF121214),
+      backgroundColor:
+          light ? const Color(0xFFFFF5DF) : const Color(0xFF121214),
       surfaceTintColor: Colors.transparent,
       scrolledUnderElevation: 0,
       centerTitle: false,
@@ -160,7 +159,10 @@ ThemeData buildAppTheme(Brightness brightness) {
     ),
     textTheme: const TextTheme(
       // iOS 大标题的观感：字重更重、字距收紧。
-      headlineSmall: TextStyle(fontWeight: FontWeight.w700, letterSpacing: -0.5),
+      headlineSmall: TextStyle(
+        fontWeight: FontWeight.w700,
+        letterSpacing: -0.5,
+      ),
       headlineMedium: TextStyle(
         fontWeight: FontWeight.w700,
         letterSpacing: -0.8,
@@ -408,7 +410,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   // 下载进度：id → 0~1，null 表示进度未知（转码阶段）。同时驱动 App 内进度条与原生 Live Update 通知。
   Map<String, double?> _downloadProgress = const {};
   // 「每日一鸟 / 今日推荐」按日期定种子，当天固定、隔天自动换。缓存住免得每帧重算。
-  _DailyBirdPicks? _dailyPicks;
+  DailyBirdPicks? _dailyPicks;
 
   static const _starterLibrary = <BirdSound>[
     BirdSound(
@@ -635,10 +637,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
             dismissedAt != null &&
             DateTime.now().difference(dismissedAt) < const Duration(seconds: 5);
         if (assetPath == null && justDismissed) return;
-        await _ringNextEnabledAlarm(
-          assetPath: assetPath,
-          useNativeAudio: true,
-        );
+        await _ringNextEnabledAlarm(assetPath: assetPath, useNativeAudio: true);
       }
     } catch (_) {
       // 前台计时器在 app 已打开时仍能兜底响铃。
@@ -718,11 +717,12 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     final enabled = _alarms.where((alarm) => alarm.enabled).toList();
     if (enabled.isEmpty) return;
     final now = DateTime.now();
-    final dueNow = enabled.where((alarm) {
-      return alarm.time.hour == now.hour &&
-          alarm.time.minute == now.minute &&
-          _alarmRunsOnDate(alarm, now);
-    }).toList();
+    final dueNow =
+        enabled.where((alarm) {
+          return alarm.time.hour == now.hour &&
+              alarm.time.minute == now.minute &&
+              _alarmRunsOnDate(alarm, now);
+        }).toList();
     final candidates = dueNow.isNotEmpty ? dueNow : enabled;
     candidates.sort((a, b) => _minutesUntil(a).compareTo(_minutesUntil(b)));
     await _ring(
@@ -883,7 +883,9 @@ class _AlarmHomePageState extends State<AlarmHomePage>
         await _systemAlarmChannel.invokeMethod<void>('cancelAlarm');
       } else {
         if (Platform.isIOS) {
-          await _systemAlarmChannel.invokeMethod<void>('requestAlarmPermissions');
+          await _systemAlarmChannel.invokeMethod<void>(
+            'requestAlarmPermissions',
+          );
         }
         // 把整库里"能离线播放的鸟鸣"（内置 asset + 下载到本机的文件）下发给原生，
         // 由原生在响铃那一刻随机选；这样下载的鸟鸣才会真正进入抽取池。
@@ -1120,10 +1122,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     final ids = <String>{sound.id, if (aliasId != null) aliasId};
     setState(() {
       _downloadingIds = {..._downloadingIds, ...ids};
-      _downloadProgress = {
-        ..._downloadProgress,
-        for (final id in ids) id: 0,
-      };
+      _downloadProgress = {..._downloadProgress, for (final id in ids) id: 0};
     });
     _pushDownloadNotification(sound.cnName, 0);
     try {
@@ -1187,9 +1186,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   ) async {
     final client = http.Client();
     try {
-      final response = await client.send(
-        http.Request('GET', Uri.parse(url)),
-      );
+      final response = await client.send(http.Request('GET', Uri.parse(url)));
       if (response.statusCode != 200) {
         throw Exception('HTTP ${response.statusCode}');
       }
@@ -1230,7 +1227,11 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   // progress: 0~100；传 -1 表示进度未知（转码中），原生显示不确定进度条。
-  void _pushDownloadNotification(String birdName, int progress, {String? text}) {
+  void _pushDownloadNotification(
+    String birdName,
+    int progress, {
+    String? text,
+  }) {
     if (!Platform.isAndroid) return;
     _systemAlarmChannel
         .invokeMethod<void>('updateDownloadProgress', {
@@ -1387,43 +1388,27 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     await _save();
   }
 
-  /// 「每日一鸟 / 今日推荐」：用当天日期当随机种子，同一天永远是同一批，隔天自动换一批。
-  /// 推荐只从「还没下载」的鸟种里挑（正好都是可以去下的）；当天下完某只后它仍留在列表里显示
-  /// 已下载，不会当场消失——缓存按「日期」失效，不跟着音库变。
-  _DailyBirdPicks _dailyBirdPicks() {
+  /// 「每日一鸟 / 今日推荐」：当天算一次就缓存起来，隔天自动重算。
+  /// 缓存按「日期」失效、不跟着音库变——这样当天下完推荐里的某只鸟，它仍留在列表里显示
+  /// 已下载，而不是当场消失。挑选逻辑见纯函数 [pickDailyBirds]。
+  DailyBirdPicks _dailyBirdPicks() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final cached = _dailyPicks;
     if (cached != null && cached.day == today) return cached;
-    // 只挑有中文名的鸟种：名录里不少条目没中文名，推给用户看意义不大。
-    final named = _nameList.where((bird) => bird.cn.isNotEmpty).toList();
-    if (named.isEmpty) {
-      return _dailyPicks = _DailyBirdPicks(
-        day: today,
-        star: null,
-        recommendations: const [],
-      );
-    }
-    final random = Random(today.year * 10000 + today.month * 100 + today.day);
-    final downloaded =
-        _library
-            .map((sound) => sound.sciName)
-            .where((sci) => sci.isNotEmpty)
-            .toSet();
-    final star = named[random.nextInt(named.length)];
-    final picks = <BirdName>[];
-    final used = <String>{star.sci};
-    for (var attempt = 0; attempt < 200 && picks.length < 6; attempt++) {
-      final candidate = named[random.nextInt(named.length)];
-      if (!used.add(candidate.sci)) continue;
-      if (downloaded.contains(candidate.sci)) continue;
-      picks.add(candidate);
-    }
-    return _dailyPicks = _DailyBirdPicks(
+    final picks = pickDailyBirds(
+      names: _nameList,
+      downloadedSci:
+          _library
+              .map((sound) => sound.sciName)
+              .where((sci) => sci.isNotEmpty)
+              .toSet(),
       day: today,
-      star: star,
-      recommendations: picks,
     );
+    // day == null 表示鸟名表还没加载完，这种空结果不能缓存，否则今天剩下的时间里
+    // 每日一鸟一直是空的（缓存是按日期失效的）。
+    if (picks.day != null) _dailyPicks = picks;
+    return picks;
   }
 
   @override
@@ -1433,85 +1418,87 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       textDirection: TextDirection.ltr,
       children: [
         Scaffold(
-      // 底栏是悬浮的，内容要能从它下面穿过去（毛玻璃才有东西可糊）。
-      extendBody: true,
-      body: Stack(
-        children: [
-          IndexedStack(
-            index: _selectedTab,
+          // 底栏不是 bottomNavigationBar，而是叠在 body 之上的悬浮胶囊：内容从它下面穿过去
+          // （毛玻璃才有东西可糊），各页滚动内容底部自己留 _kFloatingBarInset 的空白。
+          body: Stack(
             children: [
-              _AlarmTab(
-                clock: _clock,
-                nextAlarm: _nextAlarmText(),
-                alarms: _sortByTime(_alarms),
-                onAddAlarm: () => _editAlarm(),
-                onEditAlarm: _editAlarm,
-                onDeleteAlarm: (alarm) async {
-                  setState(() {
-                    _alarms =
-                        _alarms.where((item) => item.id != alarm.id).toList();
-                  });
-                  await _save();
-                },
-                onAlarmEnabledChanged: (alarm, enabled) async {
-                  setState(() {
-                    _alarms =
-                        _alarms
-                            .map(
-                              (item) =>
-                                  item.id == alarm.id
-                                      ? item.copyWith(enabled: enabled)
-                                      : item,
-                            )
-                            .toList();
-                  });
-                  await _save();
-                },
+              IndexedStack(
+                index: _selectedTab,
+                children: [
+                  _AlarmTab(
+                    clock: _clock,
+                    nextAlarm: _nextAlarmText(),
+                    alarms: _sortByTime(_alarms),
+                    onAddAlarm: () => _editAlarm(),
+                    onEditAlarm: _editAlarm,
+                    onDeleteAlarm: (alarm) async {
+                      setState(() {
+                        _alarms =
+                            _alarms
+                                .where((item) => item.id != alarm.id)
+                                .toList();
+                      });
+                      await _save();
+                    },
+                    onAlarmEnabledChanged: (alarm, enabled) async {
+                      setState(() {
+                        _alarms =
+                            _alarms
+                                .map(
+                                  (item) =>
+                                      item.id == alarm.id
+                                          ? item.copyWith(enabled: enabled)
+                                          : item,
+                                )
+                                .toList();
+                      });
+                      await _save();
+                    },
+                  ),
+                  _LibraryPanel(
+                    library: _library,
+                    species: _filteredBirdNames(),
+                    daily: _dailyBirdPicks(),
+                    controller: _queryController,
+                    speciesSearchController: _speciesSearchController,
+                    filter: _libraryFilter,
+                    searching: _searching,
+                    downloadingIds: _downloadingIds,
+                    downloadProgress: _downloadProgress,
+                    previewingSoundId: _previewingSoundId,
+                    results: _searchResults,
+                    onUpload: _pickLocalAudio,
+                    onSearch: _searchXenoCanto,
+                    onSpeciesSearchChanged: (_) => setState(() {}),
+                    onFilterChanged:
+                        (filter) => setState(() => _libraryFilter = filter),
+                    onAdd: _addXenoSound,
+                    onDownloadSpecies: _downloadSpeciesFromXeno,
+                    onDownload: _downloadXenoSound,
+                    onPreview: _togglePreview,
+                  ),
+                  _SettingsTab(
+                    onFadeInChanged: (seconds) async {
+                      await appSettings.setFadeInSeconds(seconds);
+                      await _syncSoundSettings();
+                      if (mounted) setState(() {});
+                    },
+                    onTestAlarm: _testSystemAlarm,
+                    onCheckPermissions: _requestAlarmPermissions,
+                  ),
+                  const _AboutPage(),
+                ],
               ),
-              _LibraryPanel(
-                library: _library,
-                species: _filteredBirdNames(),
-                daily: _dailyBirdPicks(),
-                controller: _queryController,
-                speciesSearchController: _speciesSearchController,
-                filter: _libraryFilter,
-                searching: _searching,
-                downloadingIds: _downloadingIds,
-                downloadProgress: _downloadProgress,
-                previewingSoundId: _previewingSoundId,
-                results: _searchResults,
-                onUpload: _pickLocalAudio,
-                onSearch: _searchXenoCanto,
-                onSpeciesSearchChanged: (_) => setState(() {}),
-                onFilterChanged:
-                    (filter) => setState(() => _libraryFilter = filter),
-                onAdd: _addXenoSound,
-                onDownloadSpecies: _downloadSpeciesFromXeno,
-                onDownload: _downloadXenoSound,
-                onPreview: _togglePreview,
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: _FloatingTabBar(
+                  selectedIndex: _selectedTab,
+                  onSelected: (index) => setState(() => _selectedTab = index),
+                ),
               ),
-              _SettingsTab(
-                onFadeInChanged: (seconds) async {
-                  await appSettings.setFadeInSeconds(seconds);
-                  await _syncSoundSettings();
-                  if (mounted) setState(() {});
-                },
-                onTestAlarm: _testSystemAlarm,
-                onCheckPermissions: _requestAlarmPermissions,
-              ),
-              const _AboutPage(),
             ],
           ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: _FloatingTabBar(
-              selectedIndex: _selectedTab,
-              onSelected: (index) => setState(() => _selectedTab = index),
-            ),
-          ),
-        ],
-      ),
-    ),
+        ),
         if (active != null)
           Positioned.fill(
             child: AlarmOverlay(
@@ -1695,16 +1682,19 @@ class _FloatingTabBar extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onSelected;
 
-  const _FloatingTabBar({required this.selectedIndex, required this.onSelected});
+  const _FloatingTabBar({
+    required this.selectedIndex,
+    required this.onSelected,
+  });
 
   static const _items = <({IconData icon, IconData activeIcon, String label})>[
     (icon: Icons.alarm_outlined, activeIcon: Icons.alarm, label: '闹钟'),
-    (icon: Icons.graphic_eq_outlined, activeIcon: Icons.graphic_eq, label: '鸟鸣'),
     (
-      icon: Icons.settings_outlined,
-      activeIcon: Icons.settings,
-      label: '设置',
+      icon: Icons.graphic_eq_outlined,
+      activeIcon: Icons.graphic_eq,
+      label: '鸟鸣',
     ),
+    (icon: Icons.settings_outlined, activeIcon: Icons.settings, label: '设置'),
     (icon: Icons.info_outline, activeIcon: Icons.info, label: '关于'),
   ];
 
@@ -1727,7 +1717,8 @@ class _FloatingTabBar extends StatelessWidget {
                     .withValues(alpha: light ? 0.72 : 0.78),
                 borderRadius: BorderRadius.circular(28),
                 border: Border.all(
-                  color: light ? const Color(0x14000000) : const Color(0x1FFFFFFF),
+                  color:
+                      light ? const Color(0x14000000) : const Color(0x1FFFFFFF),
                 ),
                 boxShadow: [
                   BoxShadow(
@@ -1737,17 +1728,22 @@ class _FloatingTabBar extends StatelessWidget {
                   ),
                 ],
               ),
-              child: Row(
-                children: [
-                  for (var index = 0; index < _items.length; index++)
-                    Expanded(
-                      child: _FloatingTabItem(
-                        item: _items[index],
-                        selected: index == selectedIndex,
-                        onTap: () => onSelected(index),
+              // 透明 Material：让 InkWell 的水波纹画在这层胶囊里，而不是穿到底下页面的
+              // Material 上（那样点击反馈会被半透明底盖住、看着没反应）。
+              child: Material(
+                type: MaterialType.transparency,
+                child: Row(
+                  children: [
+                    for (var index = 0; index < _items.length; index++)
+                      Expanded(
+                        child: _FloatingTabItem(
+                          item: _items[index],
+                          selected: index == selectedIndex,
+                          onTap: () => onSelected(index),
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -1772,7 +1768,9 @@ class _FloatingTabItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final color =
-        selected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant;
+        selected
+            ? theme.colorScheme.primary
+            : theme.colorScheme.onSurfaceVariant;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(24),
@@ -1910,17 +1908,22 @@ class _GroupedCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
       ),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          for (var index = 0; index < children.length; index++) ...[
-            if (index > 0)
-              const Padding(
-                padding: EdgeInsets.only(left: 16),
-                child: Divider(),
-              ),
-            children[index],
+      // 透明 Material：卡片里的 InkWell / IconButton 水波纹要画在卡片上，
+      // 否则会画到下层 Scaffold 的 Material 上、被卡片底色盖住。
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          children: [
+            for (var index = 0; index < children.length; index++) ...[
+              if (index > 0)
+                const Padding(
+                  padding: EdgeInsets.only(left: 16),
+                  child: Divider(),
+                ),
+              children[index],
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -2054,19 +2057,21 @@ class _SegmentedPickerState<T> extends State<_SegmentedPicker<T>> {
                   curve: Curves.easeOut,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: segment.value == selected
-                        ? (light ? Colors.white : const Color(0xFF48484A))
-                        : Colors.transparent,
+                    color:
+                        segment.value == selected
+                            ? (light ? Colors.white : const Color(0xFF48484A))
+                            : Colors.transparent,
                     borderRadius: BorderRadius.circular(9),
-                    boxShadow: segment.value == selected
-                        ? [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.10),
-                              blurRadius: 6,
-                              offset: const Offset(0, 2),
-                            ),
-                          ]
-                        : null,
+                    boxShadow:
+                        segment.value == selected
+                            ? [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.10),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ]
+                            : null,
                   ),
                   child: Text(
                     segment.label,
@@ -2074,12 +2079,14 @@ class _SegmentedPickerState<T> extends State<_SegmentedPicker<T>> {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontSize: 13.5,
-                      fontWeight: segment.value == selected
-                          ? FontWeight.w600
-                          : FontWeight.w500,
-                      color: segment.value == selected
-                          ? theme.colorScheme.onSurface
-                          : theme.colorScheme.onSurfaceVariant,
+                      fontWeight:
+                          segment.value == selected
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                      color:
+                          segment.value == selected
+                              ? theme.colorScheme.onSurface
+                              : theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ),
@@ -2243,8 +2250,12 @@ class _AlarmEditorState extends State<AlarmEditor> {
                     _time.hour,
                     _time.minute,
                   ),
-                  onDateTimeChanged: (value) =>
-                      _time = TimeOfDay(hour: value.hour, minute: value.minute),
+                  onDateTimeChanged:
+                      (value) =>
+                          _time = TimeOfDay(
+                            hour: value.hour,
+                            minute: value.minute,
+                          ),
                 ),
               ),
               const SizedBox(height: 12),
@@ -2316,9 +2327,10 @@ class _AlarmEditorState extends State<AlarmEditor> {
         repeatDays: _days,
         repeatRule: _rule,
         enabled: widget.alarm?.enabled ?? true,
-        label: _labelController.text.trim().isEmpty
-            ? '鸟鸣唤醒'
-            : _labelController.text.trim(),
+        label:
+            _labelController.text.trim().isEmpty
+                ? '鸟鸣唤醒'
+                : _labelController.text.trim(),
       ),
     );
   }
@@ -2354,23 +2366,26 @@ class _WeekdayPicker extends StatelessWidget {
                   height: 46,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: selected.contains(day)
-                        ? theme.colorScheme.primary
-                        : (light
-                              ? const Color(0xFFEDE7D6)
-                              : const Color(0xFF2C2C2E)),
+                    color:
+                        selected.contains(day)
+                            ? theme.colorScheme.primary
+                            : (light
+                                ? const Color(0xFFEDE7D6)
+                                : const Color(0xFF2C2C2E)),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Text(
                     _weekdayLabel(day),
                     style: TextStyle(
                       fontSize: 15,
-                      fontWeight: selected.contains(day)
-                          ? FontWeight.w700
-                          : FontWeight.w500,
-                      color: selected.contains(day)
-                          ? theme.colorScheme.onPrimary
-                          : theme.colorScheme.onSurfaceVariant,
+                      fontWeight:
+                          selected.contains(day)
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                      color:
+                          selected.contains(day)
+                              ? theme.colorScheme.onPrimary
+                              : theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ),
@@ -2721,20 +2736,21 @@ class _AlarmTile extends StatelessWidget {
         confirmDismiss: (_) async {
           final confirmed = await showCupertinoModalPopup<bool>(
             context: context,
-            builder: (context) => CupertinoActionSheet(
-              title: Text('删除 ${alarm.time.format(context)} 的闹钟？'),
-              actions: [
-                CupertinoActionSheetAction(
-                  isDestructiveAction: true,
-                  onPressed: () => Navigator.of(context).pop(true),
-                  child: const Text('删除闹钟'),
+            builder:
+                (context) => CupertinoActionSheet(
+                  title: Text('删除 ${alarm.time.format(context)} 的闹钟？'),
+                  actions: [
+                    CupertinoActionSheetAction(
+                      isDestructiveAction: true,
+                      onPressed: () => Navigator.of(context).pop(true),
+                      child: const Text('删除闹钟'),
+                    ),
+                  ],
+                  cancelButton: CupertinoActionSheetAction(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('取消'),
+                  ),
                 ),
-              ],
-              cancelButton: CupertinoActionSheetAction(
-                onPressed: () => Navigator.of(context).pop(false),
-                child: const Text('取消'),
-              ),
-            ),
           );
           return confirmed ?? false;
         },
@@ -2790,7 +2806,7 @@ class _AlarmTile extends StatelessWidget {
 class _LibraryPanel extends StatelessWidget {
   final List<BirdSound> library;
   final List<BirdName> species;
-  final _DailyBirdPicks daily;
+  final DailyBirdPicks daily;
   final TextEditingController controller;
   final TextEditingController speciesSearchController;
   final BirdLibraryFilter filter;
@@ -2930,36 +2946,40 @@ class _LibraryPanel extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
           ),
           clipBehavior: Clip.antiAlias,
-          child: ExpansionTile(
-            shape: const Border(),
-            collapsedShape: const Border(),
-            title: const Text('按条件搜索录音', style: TextStyle(fontSize: 15)),
-            leading: const Icon(Icons.travel_explore),
-            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            children: [
-              TextField(
-                controller: controller,
-                decoration: const InputDecoration(
-                  hintText: '例如：cnt:China q:A 或 gen:Turdus sp:merula',
+          child: Material(
+            type: MaterialType.transparency,
+            child: ExpansionTile(
+              shape: const Border(),
+              collapsedShape: const Border(),
+              title: const Text('按条件搜索录音', style: TextStyle(fontSize: 15)),
+              leading: const Icon(Icons.travel_explore),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              children: [
+                TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(
+                    hintText: '例如：cnt:China q:A 或 gen:Turdus sp:merula',
+                  ),
+                  onSubmitted: (_) => onSearch(),
                 ),
-                onSubmitted: (_) => onSearch(),
-              ),
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: searching ? null : onSearch,
-                  icon: searching
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.search),
-                  label: Text(searching ? '搜索中…' : '搜索 xeno-canto'),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: searching ? null : onSearch,
+                    icon:
+                        searching
+                            ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                            : const Icon(Icons.search),
+                    label: Text(searching ? '搜索中…' : '搜索 xeno-canto'),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         if (results.isNotEmpty) ...[
@@ -3044,9 +3064,10 @@ class _DailyBirdCard extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: light
-              ? const [Color(0xFF1D9A8A), Color(0xFF3FBFA0)]
-              : const [Color(0xFF11534D), Color(0xFF1B7A6C)],
+          colors:
+              light
+                  ? const [Color(0xFF1D9A8A), Color(0xFF3FBFA0)]
+                  : const [Color(0xFF11534D), Color(0xFF1B7A6C)],
         ),
       ),
       child: Column(
@@ -3116,22 +3137,23 @@ class _DailyBirdCard extends StatelessWidget {
                       vertical: 10,
                     ),
                   ),
-                  icon: downloading
-                      ? SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            value: progress,
-                            color: const Color(0xFF11534D),
-                          ),
-                        )
-                      : const Icon(Icons.download, size: 20),
+                  icon:
+                      downloading
+                          ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              value: progress,
+                              color: const Color(0xFF11534D),
+                            ),
+                          )
+                          : const Icon(Icons.download, size: 20),
                   label: Text(
                     downloading
                         ? (progress == null
-                              ? '处理中…'
-                              : '${(progress! * 100).round()}%')
+                            ? '处理中…'
+                            : '${(progress! * 100).round()}%')
                         : '下载这只鸟',
                   ),
                 ),
@@ -3294,9 +3316,10 @@ class _SpeciesDownloadTile extends StatelessWidget {
           Icon(
             downloaded ? Icons.check_circle : Icons.radio_button_unchecked,
             size: 20,
-            color: downloaded
-                ? theme.colorScheme.primary
-                : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+            color:
+                downloaded
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -3344,17 +3367,50 @@ class _SpeciesDownloadTile extends StatelessWidget {
   }
 }
 
-/// 「每日一鸟 / 今日推荐」的当日结果。按日期缓存，隔天重算。
-class _DailyBirdPicks {
-  final DateTime day;
+/// 「每日一鸟 / 今日推荐」的当日结果。按日期缓存，隔天重算；
+/// day 为 null = 鸟名表还没加载好的临时空结果，不该被缓存。
+class DailyBirdPicks {
+  final DateTime? day;
   final BirdName? star;
   final List<BirdName> recommendations;
 
-  const _DailyBirdPicks({
+  const DailyBirdPicks({
     required this.day,
     required this.star,
     required this.recommendations,
   });
+}
+
+/// 按日期定随机种子挑出「每日一鸟」和「今日推荐」：同一天永远是同一批，隔天自动换。
+/// 推荐只从**还没下载**的鸟种里挑（正好都是可以去下的），且不与每日一鸟重复。
+/// [names] 为空（鸟名表还没加载完）时返回 `day == null` 的空结果，调用方据此不要缓存。
+/// 纯函数，方便直接测；UI 侧的缓存在 `_AlarmHomePageState._dailyBirdPicks`。
+DailyBirdPicks pickDailyBirds({
+  required List<BirdName> names,
+  required Set<String> downloadedSci,
+  required DateTime day,
+  int count = 6,
+}) {
+  // 只挑有中文名的鸟种：名录里不少条目没中文名，推给用户看意义不大。
+  final named = names.where((bird) => bird.cn.isNotEmpty).toList();
+  if (named.isEmpty) {
+    return const DailyBirdPicks(day: null, star: null, recommendations: []);
+  }
+  final random = Random(day.year * 10000 + day.month * 100 + day.day);
+  final star = named[random.nextInt(named.length)];
+  final picks = <BirdName>[];
+  final used = <String>{star.sci};
+  for (var attempt = 0; attempt < 200 && picks.length < count; attempt++) {
+    final candidate = named[random.nextInt(named.length)];
+    if (!used.add(candidate.sci)) continue;
+    if (downloadedSci.contains(candidate.sci)) continue;
+    picks.add(candidate);
+  }
+  return DailyBirdPicks(
+    day: DateTime(day.year, day.month, day.day),
+    star: star,
+    recommendations: picks,
+  );
 }
 
 extension _FirstOrNull<T> on Iterable<T> {
@@ -3673,8 +3729,10 @@ class _SettingsTabState extends State<_SettingsTab> {
               subtitle: '音量由轻到响慢慢升上来，不会一上来就吓一跳',
               trailing: CupertinoSwitch(
                 value: fadeInSeconds > 0,
-                onChanged: (enabled) =>
-                    widget.onFadeInChanged(enabled ? _lastFadeInSeconds : 0),
+                onChanged:
+                    (enabled) => widget.onFadeInChanged(
+                      enabled ? _lastFadeInSeconds : 0,
+                    ),
               ),
             ),
             if (fadeInSeconds > 0)
@@ -3756,8 +3814,10 @@ class _SettingsTabState extends State<_SettingsTab> {
                       hintText: '没有 Key 也能用，但请求次数有限制',
                       suffixIcon: IconButton(
                         tooltip: _obscureApiKey ? '显示' : '隐藏',
-                        onPressed: () =>
-                            setState(() => _obscureApiKey = !_obscureApiKey),
+                        onPressed:
+                            () => setState(
+                              () => _obscureApiKey = !_obscureApiKey,
+                            ),
                         icon: Icon(
                           _obscureApiKey
                               ? Icons.visibility_outlined
@@ -3781,10 +3841,11 @@ class _SettingsTabState extends State<_SettingsTab> {
             _SettingsRow(
               icon: Icons.open_in_new,
               title: '打开 xeno-canto 网站',
-              onTap: () => launchUrl(
-                Uri.parse('https://xeno-canto.org'),
-                mode: LaunchMode.externalApplication,
-              ),
+              onTap:
+                  () => launchUrl(
+                    Uri.parse('https://xeno-canto.org'),
+                    mode: LaunchMode.externalApplication,
+                  ),
               trailing: Icon(
                 Icons.chevron_right,
                 color: theme.colorScheme.onSurfaceVariant,
@@ -3934,14 +3995,16 @@ String _weekdayLabel(int day) {
 BoxDecoration _mintCardDecoration(BuildContext context) {
   final light = Theme.of(context).brightness == Brightness.light;
   return BoxDecoration(
-    color: light
-        ? const Color(0xFFEAF6F2)
-        : Theme.of(context).colorScheme.surfaceContainerHighest,
+    color:
+        light
+            ? const Color(0xFFEAF6F2)
+            : Theme.of(context).colorScheme.surfaceContainerHighest,
     borderRadius: BorderRadius.circular(20),
     border: Border.all(
-      color: light
-          ? const Color(0xFFB7DCD4)
-          : Theme.of(context).colorScheme.outlineVariant,
+      color:
+          light
+              ? const Color(0xFFB7DCD4)
+              : Theme.of(context).colorScheme.outlineVariant,
     ),
   );
 }
@@ -4009,7 +4072,10 @@ class ChinaHolidayData {
             .timeout(const Duration(seconds: 8));
         if (resp.statusCode == 200 && _merge(resp.body)) {
           await prefs.setString('$_dataPrefix$year', resp.body);
-          await prefs.setInt('$_fetchedPrefix$year', now.millisecondsSinceEpoch);
+          await prefs.setInt(
+            '$_fetchedPrefix$year',
+            now.millisecondsSinceEpoch,
+          );
           changed = true;
         }
       } catch (_) {
