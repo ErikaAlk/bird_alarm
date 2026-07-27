@@ -5,12 +5,60 @@ import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import java.io.File
 
 object NativeAlarmPlayer {
     private var player: MediaPlayer? = null
 
+    // 渐响：起始音量与调音步长。起点取 8%——再低在嘈杂环境里等于没响，太高就失去「不吓人」的意义。
+    private const val FADE_START_VOLUME = 0.08f
+    private const val FADE_STEP_MILLIS = 200L
+    private val fadeHandler = Handler(Looper.getMainLooper())
+    private var fadeRunnable: Runnable? = null
+
     fun isPlaying(): Boolean = player?.isPlaying == true
+
+    // 渐响时长（秒）；0 = 关闭渐响，一上来就是满音量。由 Flutter 设置页通过
+    // MethodChannel(updateSoundSettings) 写进同一份 prefs，响铃那一刻读。
+    fun fadeInSeconds(context: Context): Int =
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt("fade_in_seconds", 0)
+
+    // 音量从 FADE_START_VOLUME 平滑爬到满音量。用平方曲线：人耳对低音量更敏感，
+    // 线性爬升听感上「前半段就已经很大了」，平方能让开头更轻、结尾更快。
+    private fun startFadeIn(mediaPlayer: MediaPlayer, seconds: Int) {
+        cancelFade()
+        val totalMillis = seconds * 1000L
+        val startedAt = SystemClock.elapsedRealtime()
+        mediaPlayer.setVolume(FADE_START_VOLUME, FADE_START_VOLUME)
+        val runnable = object : Runnable {
+            override fun run() {
+                // 只给「当前这一轮」的播放器调音：铃声已被换掉/停掉时立刻收手。
+                if (player !== mediaPlayer) return
+                val ratio =
+                    ((SystemClock.elapsedRealtime() - startedAt).toFloat() / totalMillis)
+                        .coerceIn(0f, 1f)
+                val volume = FADE_START_VOLUME + (1f - FADE_START_VOLUME) * ratio * ratio
+                try {
+                    mediaPlayer.setVolume(volume, volume)
+                } catch (_: Exception) {
+                    return // 播放器已释放
+                }
+                if (ratio < 1f) fadeHandler.postDelayed(this, FADE_STEP_MILLIS)
+            }
+        }
+        fadeRunnable = runnable
+        fadeHandler.postDelayed(runnable, FADE_STEP_MILLIS)
+    }
+
+    private fun cancelFade() {
+        fadeRunnable?.let { fadeHandler.removeCallbacks(it) }
+        fadeRunnable = null
+    }
 
     // 决定本轮响铃的鸟鸣并持久化（若已决定则复用）。在建通知前调用，确保通知能显示正确鸟名。
     fun ensureRingingAsset(context: Context): String {
@@ -78,14 +126,19 @@ object NativeAlarmPlayer {
                     mediaPlayer.setDataSource(appContext, uri)
                 }
             }
-            mediaPlayer.setVolume(1f, 1f)
+            // 渐响开着就从很轻开始、随后爬到满音量；关着则维持原来「一上来就最大声」的行为。
+            val fadeSeconds = fadeInSeconds(appContext)
+            val initialVolume = if (fadeSeconds > 0) FADE_START_VOLUME else 1f
+            mediaPlayer.setVolume(initialVolume, initialVolume)
             mediaPlayer.prepare()
             mediaPlayer.start()
             player = mediaPlayer
+            if (fadeSeconds > 0) startFadeIn(mediaPlayer, fadeSeconds)
         } catch (_: Exception) {
             // 播放彻底失败（资源/缓存/默认铃声都不可用，或 prepare/start 抛错）：释放并清掉本轮状态。
             // 关键：prepare()/start() 由 AlarmReceiver.onReceive 无包裹调用，这里若不吞掉异常会让
             // 广播接收器抛错崩进程；同时清掉 ringing_asset，避免 isAlarmRinging 谎报「仍在响」。
+            cancelFade()
             try {
                 mediaPlayer.release()
             } catch (_: Exception) {
@@ -100,6 +153,7 @@ object NativeAlarmPlayer {
     }
 
     fun stop(context: Context) {
+        cancelFade()
         player?.run {
             try {
                 stop()

@@ -117,6 +117,39 @@ class MainActivity : FlutterActivity() {
                     // Flutter 重排闹钟时据此跳过这一次发生，避免「关了又被重排回来」。
                     result.success(getSkippedTrigger())
                 }
+                "updateSoundSettings" -> {
+                    // 设置页改动（目前是闹铃渐响时长）写进原生 prefs：响铃在原生侧发生，
+                    // 那一刻 App 可能根本没在跑，只能靠这份持久化设置。
+                    val fadeInSeconds = call.argument<Int>("fadeInSeconds") ?: 0
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putInt("fade_in_seconds", fadeInSeconds.coerceIn(0, 300))
+                        .apply()
+                    result.success(null)
+                }
+                "updateDownloadProgress" -> {
+                    // progress < 0 = 进度未知（转码中），显示不确定进度条。
+                    DownloadNotifier.update(
+                        this,
+                        call.argument<String>("title") ?: "正在下载鸟鸣",
+                        call.argument<String>("text") ?: "",
+                        call.argument<Int>("progress") ?: -1,
+                    )
+                    result.success(null)
+                }
+                "finishDownloadProgress" -> {
+                    val text = call.argument<String>("text")
+                    if (text.isNullOrEmpty()) {
+                        DownloadNotifier.hide(this)
+                    } else {
+                        DownloadNotifier.finish(
+                            this,
+                            call.argument<String>("title") ?: "鸟鸣下载完成",
+                            text,
+                        )
+                    }
+                    result.success(null)
+                }
                 "testSystemAlarm" -> {
                     clearScheduledSystemAlarms()
                     clearPendingAlarmLaunch()

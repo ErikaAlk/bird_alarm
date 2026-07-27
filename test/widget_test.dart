@@ -1,10 +1,6 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// 首页与关键交互的冒烟测试。纯 Dart，不需要 Gradle；改完 Dart 用 `flutter test` 跑一遍。
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:bird_alarm/main.dart';
@@ -16,9 +12,83 @@ void main() {
     await tester.pumpWidget(const BirdAlarmApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('鸟瘾闹钟'), findsWidgets);
+    // 大标题 + 悬浮底栏里的「闹钟」。
+    expect(find.text('闹钟'), findsWidgets);
     expect(find.text('下一次唤醒'), findsOneWidget);
-    expect(find.text('鸟鸣'), findsWidgets);
-    expect(find.text('新闹钟'), findsOneWidget);
+    // 新建闹钟改成了导航栏右上角的圆形「+」，只有 tooltip 文案。
+    expect(find.byTooltip('新闹钟'), findsOneWidget);
+    // 悬浮底栏的其余三个 Tab。
+    for (final label in ['鸟鸣', '设置', '关于']) {
+      expect(find.text(label), findsWidgets);
+    }
+  });
+
+  testWidgets('Settings tab exposes appearance and ring settings', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const BirdAlarmApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('设置').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('深色模式'), findsOneWidget);
+    expect(find.text('闹铃渐响'), findsOneWidget);
+    expect(find.text('xeno-canto API Key'), findsOneWidget);
+  });
+
+  testWidgets('Weekday cells keep their size; double tap selects every day', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildAppTheme(Brightness.light),
+        home: Scaffold(
+          body: AlarmEditor(
+            alarm: BirdAlarm(
+              id: 'test',
+              time: const TimeOfDay(hour: 7, minute: 0),
+              repeatDays: const {1},
+              repeatRule: RepeatRule.weekdays,
+              enabled: true,
+              label: '测试',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    const days = ['一', '二', '三', '四', '五', '六', '日'];
+    Finder cell(String label) => find
+        .ancestor(of: find.text(label), matching: find.byType(AnimatedContainer))
+        .first;
+    Color colorOf(String label) =>
+        (tester.widget<AnimatedContainer>(cell(label)).decoration
+                as BoxDecoration)
+            .color!;
+
+    final selectedColor = colorOf('一');
+    final unselectedColor = colorOf('二');
+    expect(selectedColor, isNot(unselectedColor));
+
+    // 选中与否只换颜色，不改尺寸——旧的 FilterChip 选中后会多出对勾把后面的格子挤走。
+    final sizes = {for (final day in days) day: tester.getSize(cell(day))};
+    expect(sizes.values.toSet().length, 1);
+    await tester.tap(cell('二'));
+    await tester.pumpAndSettle();
+    expect(colorOf('二'), selectedColor);
+    for (final day in days) {
+      expect(tester.getSize(cell(day)), sizes[day]);
+    }
+
+    // 双击任意一天 = 一键全选。
+    await tester.tap(cell('三'));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(cell('三'));
+    await tester.pumpAndSettle();
+    for (final day in days) {
+      expect(colorOf(day), selectedColor, reason: '双击后 $day 应处于选中态');
+    }
   });
 }
