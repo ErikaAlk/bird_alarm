@@ -4001,7 +4001,7 @@ class _AboutPage extends StatelessWidget {
   const _AboutPage();
 
   // 关于页展示的版本号——发版时与 pubspec.yaml 的 version 同步更新。设置页页脚也用它。
-  static const appVersion = 'v1.4.0';
+  static const appVersion = 'v1.4.1';
 
   @override
   Widget build(BuildContext context) {
@@ -4714,7 +4714,11 @@ class ActiveAlarm {
 
 /// 全屏响铃遮罩：铺满整个屏幕（盖住底部导航栏），显示正在叫的鸟 + 关闭 / 贪睡。
 /// 由 MainActivity 的 showWhenLocked 让它能显示在锁屏之上。
-class AlarmOverlay extends StatelessWidget {
+///
+/// **盲操手势**：整屏任意位置**上滑关闭 / 下滑贪睡**。刚睡醒摸黑按，谁也瞄不准按钮，
+/// 所以手势不挑落点；越过阈值先震一下（闭着眼也知道「够了」），松手才真正执行——
+/// 中途改主意松手前划回去即可取消。按钮保留，睁眼时照常能点。
+class AlarmOverlay extends StatefulWidget {
   final ActiveAlarm active;
   final VoidCallback onDismiss;
   final VoidCallback onSnooze;
@@ -4727,71 +4731,196 @@ class AlarmOverlay extends StatelessWidget {
   });
 
   @override
+  State<AlarmOverlay> createState() => _AlarmOverlayState();
+}
+
+class _AlarmOverlayState extends State<AlarmOverlay> {
+  // 触发距离取得比较大：半梦半醒时手在屏幕上蹭一下不该把闹钟关掉。
+  static const double _threshold = 120;
+  static const double _flingVelocity = 900;
+
+  double _drag = 0;
+  bool _passed = false;
+  bool _fired = false;
+
+  void _handleUpdate(DragUpdateDetails details) {
+    if (_fired) return;
+    setState(() => _drag += details.delta.dy);
+    final passed = _drag.abs() >= _threshold;
+    if (passed != _passed) {
+      setState(() => _passed = passed);
+      // 越过/退回阈值都震一下：这是盲操时唯一的「反馈」。
+      HapticFeedback.selectionClick();
+    }
+  }
+
+  void _handleEnd(DragEndDetails details) {
+    if (_fired) return;
+    final velocity = details.primaryVelocity ?? 0;
+    final up = _drag <= -_threshold || velocity <= -_flingVelocity;
+    final down = _drag >= _threshold || velocity >= _flingVelocity;
+    if (up || down) {
+      _fired = true;
+      HapticFeedback.heavyImpact();
+      up ? widget.onDismiss() : widget.onSnooze();
+      return;
+    }
+    setState(() {
+      _drag = 0;
+      _passed = false;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final light = theme.brightness == Brightness.light;
+    final active = widget.active;
+    final up = _drag < 0;
     return Material(
       color: light ? const Color(0xFFFFF5DF) : theme.colorScheme.surface,
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Spacer(),
-              Icon(
-                Icons.notifications_active,
-                size: 72,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(height: 20),
-              Text(
-                active.alarm.label,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 18),
-              Text(
-                '正在叫的是',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                active.sound.cnName,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.displaySmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: theme.colorScheme.primary,
+      child: GestureDetector(
+        // opaque：整屏都能起手，不用瞄准任何控件。
+        behavior: HitTestBehavior.opaque,
+        onVerticalDragUpdate: _handleUpdate,
+        onVerticalDragEnd: _handleEnd,
+        onVerticalDragCancel:
+            () => setState(() {
+              _drag = 0;
+              _passed = false;
+            }),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(28, 16, 28, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _SwipeHint(
+                  icon: Icons.keyboard_arrow_up,
+                  label: '上滑关闭闹钟',
+                  activeLabel: '松手关闭闹钟',
+                  active: _passed && up,
+                  progress: _drag < 0 ? (-_drag / _threshold).clamp(0, 1) : 0,
                 ),
-              ),
-              const Spacer(),
-              FilledButton.icon(
-                onPressed: onDismiss,
-                icon: const Icon(Icons.alarm_off),
-                label: const Text('关闭闹钟'),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                Expanded(
+                  // 内容跟着手指走一点点，手势有「拖得动」的实感。
+                  child: Transform.translate(
+                    offset: Offset(0, _drag * 0.35),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.notifications_active,
+                          size: 68,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          active.alarm.label,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.headlineSmall,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          '正在叫的是',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          active.sound.cnName,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.displaySmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          '来源：${active.sound.source}',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: onSnooze,
-                icon: const Icon(Icons.snooze),
-                label: const Text('贪睡 5 分钟'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                FilledButton.icon(
+                  onPressed: widget.onDismiss,
+                  icon: const Icon(Icons.alarm_off),
+                  label: const Text('关闭闹钟'),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '来源：${active.sound.source}',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall,
-              ),
-            ],
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: widget.onSnooze,
+                  icon: const Icon(Icons.snooze),
+                  label: const Text('贪睡 5 分钟'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _SwipeHint(
+                  icon: Icons.keyboard_arrow_down,
+                  label: '下滑贪睡 5 分钟',
+                  activeLabel: '松手贪睡 5 分钟',
+                  active: _passed && !up,
+                  progress: _drag > 0 ? (_drag / _threshold).clamp(0, 1) : 0,
+                ),
+              ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 响铃遮罩上下两条滑动提示。跟着手指的位移变亮变粗，越过阈值换成「松手就…」。
+class _SwipeHint extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String activeLabel;
+  final bool active;
+  final double progress;
+
+  const _SwipeHint({
+    required this.icon,
+    required this.label,
+    required this.activeLabel,
+    required this.active,
+    required this.progress,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color =
+        Color.lerp(
+          theme.colorScheme.onSurfaceVariant,
+          theme.colorScheme.primary,
+          progress,
+        )!;
+    return AnimatedOpacity(
+      opacity: 0.55 + 0.45 * progress,
+      duration: const Duration(milliseconds: 120),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 20 + 6 * progress, color: color),
+          const SizedBox(width: 6),
+          Text(
+            active ? activeLabel : label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
