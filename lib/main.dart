@@ -925,10 +925,12 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   // 以前这里直接调 _requestAlarmPermissions——权限都齐时它一个分支都不进、什么也不做，
   // 用户点了没任何反应，看着像按钮坏了。
   Future<void> _showPermissionCheck() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => const _PermissionCheckSheet(),
+    // 推入新页面而不是弹底部浮层：那一行右边有 ">" 箭头，箭头就该意味着「进下一页」。
+    // 转场用主题里的 Cupertino 横推，返回手势也一并有了。
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => const _PermissionCheckPage(),
+      ),
     );
   }
 
@@ -1859,11 +1861,14 @@ class _LargeTitleScrollView extends StatelessWidget {
   final String title;
   final List<Widget> actions;
   final List<Widget> children;
+  // Tab 页底部要给悬浮底栏让位；推入的独立页面没有底栏，留一点安全边距就够。
+  final bool floatingBarBelow;
 
   const _LargeTitleScrollView({
     required this.title,
     required this.children,
     this.actions = const [],
+    this.floatingBarBelow = true,
   });
 
   @override
@@ -1876,7 +1881,12 @@ class _LargeTitleScrollView extends StatelessWidget {
           expandedHeight: 116,
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, _kFloatingBarInset),
+          padding: EdgeInsets.fromLTRB(
+            20,
+            0,
+            20,
+            floatingBarBelow ? _kFloatingBarInset : 32,
+          ),
           sliver: SliverList(delegate: SliverChildListDelegate(children)),
         ),
       ],
@@ -4208,17 +4218,19 @@ class _SocialLinkTile extends StatelessWidget {
   }
 }
 
-/// 权限自检面板。以前设置页那个「检查闹钟权限」只在**缺**权限时才跳系统设置，
-/// 全授权了就一声不吭——按了没反应，跟坏了一样。现在改成把每一项的状态列出来，
-/// 缺哪项点哪项去开，全好了也明确告诉你「都齐了」。
-class _PermissionCheckSheet extends StatefulWidget {
-  const _PermissionCheckSheet();
+/// 权限自检页。两件事：
+/// 1. 以前设置页那个「检查闹钟权限」只在**缺**权限时才跳系统设置，全授权了就一声不吭——
+///    按了没反应，跟坏了一样。现在把每一项的状态都列出来。
+/// 2. 它是**从右侧推入的独立页面**，不是底部浮层：设置行右边那个 ">" 箭头在所有系统里
+///    都意味着「进下一页」，点了却从底下弹出个浮层，手感是拧的。
+class _PermissionCheckPage extends StatefulWidget {
+  const _PermissionCheckPage();
 
   @override
-  State<_PermissionCheckSheet> createState() => _PermissionCheckSheetState();
+  State<_PermissionCheckPage> createState() => _PermissionCheckPageState();
 }
 
-class _PermissionCheckSheetState extends State<_PermissionCheckSheet>
+class _PermissionCheckPageState extends State<_PermissionCheckPage>
     with WidgetsBindingObserver {
   static const _items = <({String key, String title, String detail})>[
     (key: 'notifications', title: '通知', detail: '响铃通知、倒计时、下载进度都要它'),
@@ -4290,79 +4302,74 @@ class _PermissionCheckSheetState extends State<_PermissionCheckSheet>
         status == null
             ? -1
             : _items.where((item) => status[item.key] != true).length;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return Scaffold(
+      body: _LargeTitleScrollView(
+        title: '权限自检',
+        floatingBarBelow: false,
+        actions: [
+          if (_checking)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 18),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            _CircleActionButton(
+              icon: Icons.refresh,
+              tooltip: '重新检查',
+              onPressed: _check,
+            ),
+        ],
+        children: [
+          Text(
+            switch (missing) {
+              -1 => '查不到权限状态（这台设备可能不是 Android）。',
+              0 => '闹钟需要的权限都齐了。',
+              _ => '有 $missing 项还没开，点右边去开启。',
+            },
+            style: TextStyle(
+              fontSize: 13,
+              color:
+                  missing > 0
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (status != null)
+            _GroupedCard(
               children: [
-                Text('权限自检', style: theme.textTheme.titleLarge),
-                const Spacer(),
-                if (_checking)
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                else
-                  IconButton(
-                    tooltip: '重新检查',
-                    onPressed: _check,
-                    icon: const Icon(Icons.refresh),
+                for (final item in _items)
+                  _PermissionRow(
+                    title: item.title,
+                    detail: item.detail,
+                    granted: status[item.key] == true,
+                    onOpen: () => _open(item.key),
                   ),
               ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              switch (missing) {
-                -1 => '查不到权限状态（这台设备可能不是 Android）。',
-                0 => '闹钟需要的权限都齐了。',
-                _ => '有 $missing 项还没开，点右边去开启。',
-              },
-              style: TextStyle(
-                fontSize: 13,
-                color:
-                    missing > 0
-                        ? theme.colorScheme.error
-                        : theme.colorScheme.onSurfaceVariant,
-              ),
+          const SizedBox(height: 14),
+          Text(
+            '部分国产 ROM 还有「自启动」「后台弹出界面」「锁屏显示」等私有开关，系统不让 App 查询，'
+            '需要你在应用设置里手动确认一次。',
+            style: TextStyle(
+              fontSize: 12,
+              color: theme.colorScheme.onSurfaceVariant,
             ),
-            const SizedBox(height: 14),
-            if (status != null)
-              _GroupedCard(
-                children: [
-                  for (final item in _items)
-                    _PermissionRow(
-                      title: item.title,
-                      detail: item.detail,
-                      granted: status[item.key] == true,
-                      onOpen: () => _open(item.key),
-                    ),
-                ],
-              ),
-            const SizedBox(height: 12),
-            Text(
-              '部分国产 ROM 还有「自启动」「后台弹出界面」「锁屏显示」等私有开关，系统不让 App 查询，'
-              '需要你在应用设置里手动确认一次。',
-              style: TextStyle(
-                fontSize: 12,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _open('appDetails'),
+              icon: const Icon(Icons.open_in_new, size: 18),
+              label: const Text('打开本应用的系统设置页'),
             ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _open('appDetails'),
-                icon: const Icon(Icons.open_in_new, size: 18),
-                label: const Text('打开本应用的系统设置页'),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -4650,15 +4657,17 @@ class _SettingsTabState extends State<_SettingsTab> {
               ),
             ),
             _SettingsRow(
-              icon: Icons.open_in_new,
+              icon: Icons.language,
               title: '打开 xeno-canto 网站',
               onTap:
                   () => launchUrl(
                     Uri.parse('https://xeno-canto.org'),
                     mode: LaunchMode.externalApplication,
                   ),
+              // 跳外部浏览器不是「进下一页」，别用 ">" 箭头。
               trailing: Icon(
-                Icons.chevron_right,
+                Icons.open_in_new,
+                size: 18,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
@@ -4682,9 +4691,14 @@ class _SettingsTabState extends State<_SettingsTab> {
               icon: Icons.notifications_active_outlined,
               title: '测试系统闹钟',
               subtitle: '10 秒后触发一次，用来确认响铃链路正常',
-              trailing: Icon(
-                Icons.chevron_right,
-                color: theme.colorScheme.onSurfaceVariant,
+              // 这一行是「就地执行一个动作」，不是进下一页，所以给个「运行」而不是箭头。
+              trailing: Text(
+                '运行',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.primary,
+                ),
               ),
               onTap: widget.onTestAlarm,
             ),
