@@ -68,7 +68,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - **图片自己下载到本地再显示**（`BirdPhotos.imageFile`，按学名一个文件）：`Image.network` 没有超时，手机上 CDN 卡住会一直转、看着就是「图加载不出来」；自己下能设超时(25s)、能缓存、能明确报失败并支持点一下重试。
   - **署名不能省**：CC BY / BY-NC 要求标作者与许可证，卡片右下角那行就是干这个的。
 - **权限自检要「看得见」**：`checkAlarmPermissions` 返回四项布尔（通知含 `areNotificationsEnabled`、全屏通知、精确闹钟、电池不受限），`openPermissionSetting(type)` 跳对应设置页、失败一律退回应用详情页。设置页那颗按钮开 `_PermissionCheckSheet`（`resumed` 时自动重查）。**别再让它「有问题才有反应」**——旧版权限齐全时什么都不做，用户以为按钮坏了。
-- **响铃遮罩的盲操手势**：`AlarmOverlay` 整屏 `onVerticalDragUpdate/End`——**上滑关闭、下滑贪睡**，阈值 120px 或甩动 900px/s，**松手才执行**。越过阈值 `HapticFeedback.selectionClick()`、执行时 `heavyImpact()`：摸黑操作时震动是唯一反馈，别删。阈值别调小（半梦半醒蹭一下就关掉闹钟是灾难），也别改成单击/双击（拿起手机就误触）。`test/alarm_overlay_test.dart` 守住这几条。
+- **响铃遮罩的盲操手势**：`AlarmOverlay` 整屏 `onVerticalDragUpdate/End`——**上滑关闭、下滑贪睡**，阈值 120px 或甩动 900px/s，**松手才执行**。越过阈值震一记极短、关闭震一记长（380ms/255）、贪睡震三记短——**三种必须能闭眼分辨**，摸黑时这是唯一能确认自己干了什么的信号。
+  震动走原生 `vibrate` 方法（`Vibrator` + `VibrationEffect` 指定振幅 + `USAGE_ALARM`），**别退回 Flutter 的 `HapticFeedback`**：那个走系统触感反馈，强度由系统设置决定、实测基本感觉不到。manifest 里的 `VIBRATE` 权限是必需的（缺了 `Vibrator` 静默失败、什么也不震）。阈值别调小（半梦半醒蹭一下就关掉闹钟是灾难），也别改成单击/双击（拿起手机就误触）。`test/alarm_overlay_test.dart` 守住这几条。
 - **列表项别用左滑手势**：整页要留给 `PageView` 左右滑动切 Tab，闹钟卡片再做「左滑删除」会抢手势（手指落在卡片上一划就变成拖删除条，页翻不动）。删除走**长按卡片**或编辑弹窗里的删除按钮，两处共用 `showDeleteAlarmDialog`。
 - **开关一律用 Material `Switch`**：用户明确不要「安卓苹果缝合」，`CupertinoSwitch` 别再回来。大标题、悬浮底栏、圆角卡片、时间滚轮这些 iOS 味的保留，开关跟系统走。
 - **「还有多久响铃」只在 App 内**：报时卡的倒计时由 `countdownText()` 按 `_clock` 每秒重算（只重建那一小块）；**不要**为它加常驻通知——通知里只保留响铃前 10 分钟那条倒计时。

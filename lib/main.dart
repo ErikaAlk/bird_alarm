@@ -4712,6 +4712,34 @@ class ActiveAlarm {
   const ActiveAlarm({required this.alarm, required this.sound});
 }
 
+/// 响铃遮罩的震动反馈。走原生 `vibrate`（Vibrator + 指定振幅 + USAGE_ALARM），
+/// **不用 Flutter 的 `HapticFeedback`**——那个走系统触感反馈，强度由系统设置决定、
+/// 通常轻到感觉不到，而且三种情况震得一模一样，摸黑分不出自己到底关了还是贪睡了。
+///
+/// 三种模式刻意做得能闭眼分辨：越过触发线是一记极短轻震，关闭是一记长实震，
+/// 贪睡是三记短震。原生不可用时退回 `HapticFeedback` 兜底。
+class AlarmHaptics {
+  static const _channel = MethodChannel('bird_alarm/system_alarm');
+
+  /// 越过触发线：短促一下，告诉手指「够了，可以松手」。
+  static void tick() => _fire('tick', HapticFeedback.selectionClick);
+
+  /// 关闭闹钟：一记长震。
+  static void dismissed() => _fire('dismiss', HapticFeedback.heavyImpact);
+
+  /// 贪睡：三记短震，与关闭明显不同。
+  static void snoozed() => _fire('snooze', HapticFeedback.mediumImpact);
+
+  static void _fire(String pattern, Future<void> Function() fallback) {
+    _channel.invokeMethod<void>('vibrate', {'pattern': pattern}).catchError((
+      _,
+    ) {
+      // 非 Android 或通道不可用：至少给一下系统触感。
+      fallback();
+    });
+  }
+}
+
 /// 全屏响铃遮罩：铺满整个屏幕（盖住底部导航栏），显示正在叫的鸟 + 关闭 / 贪睡。
 /// 由 MainActivity 的 showWhenLocked 让它能显示在锁屏之上。
 ///
@@ -4750,7 +4778,7 @@ class _AlarmOverlayState extends State<AlarmOverlay> {
     if (passed != _passed) {
       setState(() => _passed = passed);
       // 越过/退回阈值都震一下：这是盲操时唯一的「反馈」。
-      HapticFeedback.selectionClick();
+      AlarmHaptics.tick();
     }
   }
 
@@ -4760,15 +4788,28 @@ class _AlarmOverlayState extends State<AlarmOverlay> {
     final up = _drag <= -_threshold || velocity <= -_flingVelocity;
     final down = _drag >= _threshold || velocity >= _flingVelocity;
     if (up || down) {
-      _fired = true;
-      HapticFeedback.heavyImpact();
-      up ? widget.onDismiss() : widget.onSnooze();
+      up ? _dismiss() : _snooze();
       return;
     }
     setState(() {
       _drag = 0;
       _passed = false;
     });
+  }
+
+  // 关闭与贪睡各自震一种花样：摸黑操作时，震动是唯一能确认「我刚才到底干了什么」的信号。
+  void _dismiss() {
+    if (_fired) return;
+    _fired = true;
+    AlarmHaptics.dismissed();
+    widget.onDismiss();
+  }
+
+  void _snooze() {
+    if (_fired) return;
+    _fired = true;
+    AlarmHaptics.snoozed();
+    widget.onSnooze();
   }
 
   @override
@@ -4846,7 +4887,7 @@ class _AlarmOverlayState extends State<AlarmOverlay> {
                   ),
                 ),
                 FilledButton.icon(
-                  onPressed: widget.onDismiss,
+                  onPressed: _dismiss,
                   icon: const Icon(Icons.alarm_off),
                   label: const Text('关闭闹钟'),
                   style: FilledButton.styleFrom(
@@ -4855,7 +4896,7 @@ class _AlarmOverlayState extends State<AlarmOverlay> {
                 ),
                 const SizedBox(height: 10),
                 OutlinedButton.icon(
-                  onPressed: widget.onSnooze,
+                  onPressed: _snooze,
                   icon: const Icon(Icons.snooze),
                   label: const Text('贪睡 5 分钟'),
                   style: OutlinedButton.styleFrom(
