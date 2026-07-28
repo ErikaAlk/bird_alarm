@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.media.AudioAttributes
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaExtractor
@@ -18,6 +19,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.view.WindowManager
 import io.flutter.embedding.engine.FlutterEngine
@@ -97,6 +101,10 @@ class MainActivity : FlutterActivity() {
                 }
                 "requestAlarmPermissions" -> {
                     requestAlarmPermissions()
+                    result.success(null)
+                }
+                "vibrate" -> {
+                    vibratePattern(call.argument<String>("pattern") ?: "tick")
                     result.success(null)
                 }
                 "checkAlarmPermissions" -> {
@@ -432,6 +440,64 @@ class MainActivity : FlutterActivity() {
                 )
             } catch (_: Exception) {
             }
+        }
+    }
+
+    // 响铃遮罩盲操手势的震动。**不用 Flutter 的 HapticFeedback**：那个走
+    // View.performHapticFeedback，强度由系统触感设置决定、通常轻到感觉不到，也没法区分动作。
+    // 这里直接用 Vibrator 指定时长与振幅（255=满），并按 USAGE_ALARM 归类（闹钟类震动，
+    // 不受「媒体/触感」那类降级影响）。三种模式刻意做得能闭着眼分辨：
+    //   tick   —— 越过触发线：一记很短的轻震
+    //   dismiss—— 关闭闹钟：一记长实震（“结束了”）
+    //   snooze —— 贪睡：三记短震（“还会再来”）
+    private fun vibratePattern(pattern: String) {
+        val vibrator =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager)
+                    .defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            }
+        if (!vibrator.hasVibrator()) return
+
+        val timings: LongArray
+        val amplitudes: IntArray
+        when (pattern) {
+            "dismiss" -> {
+                timings = longArrayOf(0, 380)
+                amplitudes = intArrayOf(0, 255)
+            }
+            "snooze" -> {
+                timings = longArrayOf(0, 80, 110, 80, 110, 80)
+                amplitudes = intArrayOf(0, 255, 0, 255, 0, 255)
+            }
+            else -> {
+                timings = longArrayOf(0, 30)
+                amplitudes = intArrayOf(0, 200)
+            }
+        }
+
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ALARM)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val effect =
+                    if (vibrator.hasAmplitudeControl()) {
+                        VibrationEffect.createWaveform(timings, amplitudes, -1)
+                    } else {
+                        // 马达不支持调幅（少见）：只能用时长表达强弱。
+                        VibrationEffect.createWaveform(timings, -1)
+                    }
+                vibrator.vibrate(effect, attributes)
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(timings, -1, attributes)
+            }
+        } catch (_: Exception) {
+            // 没有 VIBRATE 权限或厂商实现异常时忽略，不影响关闹钟本身。
         }
     }
 

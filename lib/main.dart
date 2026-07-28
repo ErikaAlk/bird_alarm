@@ -925,10 +925,12 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   // 以前这里直接调 _requestAlarmPermissions——权限都齐时它一个分支都不进、什么也不做，
   // 用户点了没任何反应，看着像按钮坏了。
   Future<void> _showPermissionCheck() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => const _PermissionCheckSheet(),
+    // 推入新页面而不是弹底部浮层：那一行右边有 ">" 箭头，箭头就该意味着「进下一页」。
+    // 转场用主题里的 Cupertino 横推，返回手势也一并有了。
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => const _PermissionCheckPage(),
+      ),
     );
   }
 
@@ -1859,11 +1861,14 @@ class _LargeTitleScrollView extends StatelessWidget {
   final String title;
   final List<Widget> actions;
   final List<Widget> children;
+  // Tab 页底部要给悬浮底栏让位；推入的独立页面没有底栏，留一点安全边距就够。
+  final bool floatingBarBelow;
 
   const _LargeTitleScrollView({
     required this.title,
     required this.children,
     this.actions = const [],
+    this.floatingBarBelow = true,
   });
 
   @override
@@ -1876,7 +1881,12 @@ class _LargeTitleScrollView extends StatelessWidget {
           expandedHeight: 116,
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, _kFloatingBarInset),
+          padding: EdgeInsets.fromLTRB(
+            20,
+            0,
+            20,
+            floatingBarBelow ? _kFloatingBarInset : 32,
+          ),
           sliver: SliverList(delegate: SliverChildListDelegate(children)),
         ),
       ],
@@ -4001,7 +4011,7 @@ class _AboutPage extends StatelessWidget {
   const _AboutPage();
 
   // 关于页展示的版本号——发版时与 pubspec.yaml 的 version 同步更新。设置页页脚也用它。
-  static const appVersion = 'v1.4.0';
+  static const appVersion = 'v1.4.1';
 
   @override
   Widget build(BuildContext context) {
@@ -4208,17 +4218,19 @@ class _SocialLinkTile extends StatelessWidget {
   }
 }
 
-/// 权限自检面板。以前设置页那个「检查闹钟权限」只在**缺**权限时才跳系统设置，
-/// 全授权了就一声不吭——按了没反应，跟坏了一样。现在改成把每一项的状态列出来，
-/// 缺哪项点哪项去开，全好了也明确告诉你「都齐了」。
-class _PermissionCheckSheet extends StatefulWidget {
-  const _PermissionCheckSheet();
+/// 权限自检页。两件事：
+/// 1. 以前设置页那个「检查闹钟权限」只在**缺**权限时才跳系统设置，全授权了就一声不吭——
+///    按了没反应，跟坏了一样。现在把每一项的状态都列出来。
+/// 2. 它是**从右侧推入的独立页面**，不是底部浮层：设置行右边那个 ">" 箭头在所有系统里
+///    都意味着「进下一页」，点了却从底下弹出个浮层，手感是拧的。
+class _PermissionCheckPage extends StatefulWidget {
+  const _PermissionCheckPage();
 
   @override
-  State<_PermissionCheckSheet> createState() => _PermissionCheckSheetState();
+  State<_PermissionCheckPage> createState() => _PermissionCheckPageState();
 }
 
-class _PermissionCheckSheetState extends State<_PermissionCheckSheet>
+class _PermissionCheckPageState extends State<_PermissionCheckPage>
     with WidgetsBindingObserver {
   static const _items = <({String key, String title, String detail})>[
     (key: 'notifications', title: '通知', detail: '响铃通知、倒计时、下载进度都要它'),
@@ -4290,79 +4302,74 @@ class _PermissionCheckSheetState extends State<_PermissionCheckSheet>
         status == null
             ? -1
             : _items.where((item) => status[item.key] != true).length;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return Scaffold(
+      body: _LargeTitleScrollView(
+        title: '权限自检',
+        floatingBarBelow: false,
+        actions: [
+          if (_checking)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 14, vertical: 18),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            _CircleActionButton(
+              icon: Icons.refresh,
+              tooltip: '重新检查',
+              onPressed: _check,
+            ),
+        ],
+        children: [
+          Text(
+            switch (missing) {
+              -1 => '查不到权限状态（这台设备可能不是 Android）。',
+              0 => '闹钟需要的权限都齐了。',
+              _ => '有 $missing 项还没开，点右边去开启。',
+            },
+            style: TextStyle(
+              fontSize: 13,
+              color:
+                  missing > 0
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (status != null)
+            _GroupedCard(
               children: [
-                Text('权限自检', style: theme.textTheme.titleLarge),
-                const Spacer(),
-                if (_checking)
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                else
-                  IconButton(
-                    tooltip: '重新检查',
-                    onPressed: _check,
-                    icon: const Icon(Icons.refresh),
+                for (final item in _items)
+                  _PermissionRow(
+                    title: item.title,
+                    detail: item.detail,
+                    granted: status[item.key] == true,
+                    onOpen: () => _open(item.key),
                   ),
               ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              switch (missing) {
-                -1 => '查不到权限状态（这台设备可能不是 Android）。',
-                0 => '闹钟需要的权限都齐了。',
-                _ => '有 $missing 项还没开，点右边去开启。',
-              },
-              style: TextStyle(
-                fontSize: 13,
-                color:
-                    missing > 0
-                        ? theme.colorScheme.error
-                        : theme.colorScheme.onSurfaceVariant,
-              ),
+          const SizedBox(height: 14),
+          Text(
+            '部分国产 ROM 还有「自启动」「后台弹出界面」「锁屏显示」等私有开关，系统不让 App 查询，'
+            '需要你在应用设置里手动确认一次。',
+            style: TextStyle(
+              fontSize: 12,
+              color: theme.colorScheme.onSurfaceVariant,
             ),
-            const SizedBox(height: 14),
-            if (status != null)
-              _GroupedCard(
-                children: [
-                  for (final item in _items)
-                    _PermissionRow(
-                      title: item.title,
-                      detail: item.detail,
-                      granted: status[item.key] == true,
-                      onOpen: () => _open(item.key),
-                    ),
-                ],
-              ),
-            const SizedBox(height: 12),
-            Text(
-              '部分国产 ROM 还有「自启动」「后台弹出界面」「锁屏显示」等私有开关，系统不让 App 查询，'
-              '需要你在应用设置里手动确认一次。',
-              style: TextStyle(
-                fontSize: 12,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _open('appDetails'),
+              icon: const Icon(Icons.open_in_new, size: 18),
+              label: const Text('打开本应用的系统设置页'),
             ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _open('appDetails'),
-                icon: const Icon(Icons.open_in_new, size: 18),
-                label: const Text('打开本应用的系统设置页'),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -4650,15 +4657,17 @@ class _SettingsTabState extends State<_SettingsTab> {
               ),
             ),
             _SettingsRow(
-              icon: Icons.open_in_new,
+              icon: Icons.language,
               title: '打开 xeno-canto 网站',
               onTap:
                   () => launchUrl(
                     Uri.parse('https://xeno-canto.org'),
                     mode: LaunchMode.externalApplication,
                   ),
+              // 跳外部浏览器不是「进下一页」，别用 ">" 箭头。
               trailing: Icon(
-                Icons.chevron_right,
+                Icons.open_in_new,
+                size: 18,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
@@ -4682,9 +4691,14 @@ class _SettingsTabState extends State<_SettingsTab> {
               icon: Icons.notifications_active_outlined,
               title: '测试系统闹钟',
               subtitle: '10 秒后触发一次，用来确认响铃链路正常',
-              trailing: Icon(
-                Icons.chevron_right,
-                color: theme.colorScheme.onSurfaceVariant,
+              // 这一行是「就地执行一个动作」，不是进下一页，所以给个「运行」而不是箭头。
+              trailing: Text(
+                '运行',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.primary,
+                ),
               ),
               onTap: widget.onTestAlarm,
             ),
@@ -4712,9 +4726,41 @@ class ActiveAlarm {
   const ActiveAlarm({required this.alarm, required this.sound});
 }
 
+/// 响铃遮罩的震动反馈。走原生 `vibrate`（Vibrator + 指定振幅 + USAGE_ALARM），
+/// **不用 Flutter 的 `HapticFeedback`**——那个走系统触感反馈，强度由系统设置决定、
+/// 通常轻到感觉不到，而且三种情况震得一模一样，摸黑分不出自己到底关了还是贪睡了。
+///
+/// 三种模式刻意做得能闭眼分辨：越过触发线是一记极短轻震，关闭是一记长实震，
+/// 贪睡是三记短震。原生不可用时退回 `HapticFeedback` 兜底。
+class AlarmHaptics {
+  static const _channel = MethodChannel('bird_alarm/system_alarm');
+
+  /// 越过触发线：短促一下，告诉手指「够了，可以松手」。
+  static void tick() => _fire('tick', HapticFeedback.selectionClick);
+
+  /// 关闭闹钟：一记长震。
+  static void dismissed() => _fire('dismiss', HapticFeedback.heavyImpact);
+
+  /// 贪睡：三记短震，与关闭明显不同。
+  static void snoozed() => _fire('snooze', HapticFeedback.mediumImpact);
+
+  static void _fire(String pattern, Future<void> Function() fallback) {
+    _channel.invokeMethod<void>('vibrate', {'pattern': pattern}).catchError((
+      _,
+    ) {
+      // 非 Android 或通道不可用：至少给一下系统触感。
+      fallback();
+    });
+  }
+}
+
 /// 全屏响铃遮罩：铺满整个屏幕（盖住底部导航栏），显示正在叫的鸟 + 关闭 / 贪睡。
 /// 由 MainActivity 的 showWhenLocked 让它能显示在锁屏之上。
-class AlarmOverlay extends StatelessWidget {
+///
+/// **盲操手势**：整屏任意位置**上滑关闭 / 下滑贪睡**。刚睡醒摸黑按，谁也瞄不准按钮，
+/// 所以手势不挑落点；越过阈值先震一下（闭着眼也知道「够了」），松手才真正执行——
+/// 中途改主意松手前划回去即可取消。按钮保留，睁眼时照常能点。
+class AlarmOverlay extends StatefulWidget {
   final ActiveAlarm active;
   final VoidCallback onDismiss;
   final VoidCallback onSnooze;
@@ -4727,71 +4773,209 @@ class AlarmOverlay extends StatelessWidget {
   });
 
   @override
+  State<AlarmOverlay> createState() => _AlarmOverlayState();
+}
+
+class _AlarmOverlayState extends State<AlarmOverlay> {
+  // 触发距离取得比较大：半梦半醒时手在屏幕上蹭一下不该把闹钟关掉。
+  static const double _threshold = 120;
+  static const double _flingVelocity = 900;
+
+  double _drag = 0;
+  bool _passed = false;
+  bool _fired = false;
+
+  void _handleUpdate(DragUpdateDetails details) {
+    if (_fired) return;
+    setState(() => _drag += details.delta.dy);
+    final passed = _drag.abs() >= _threshold;
+    if (passed != _passed) {
+      setState(() => _passed = passed);
+      // 越过/退回阈值都震一下：这是盲操时唯一的「反馈」。
+      AlarmHaptics.tick();
+    }
+  }
+
+  void _handleEnd(DragEndDetails details) {
+    if (_fired) return;
+    final velocity = details.primaryVelocity ?? 0;
+    final up = _drag <= -_threshold || velocity <= -_flingVelocity;
+    final down = _drag >= _threshold || velocity >= _flingVelocity;
+    if (up || down) {
+      up ? _dismiss() : _snooze();
+      return;
+    }
+    setState(() {
+      _drag = 0;
+      _passed = false;
+    });
+  }
+
+  // 关闭与贪睡各自震一种花样：摸黑操作时，震动是唯一能确认「我刚才到底干了什么」的信号。
+  void _dismiss() {
+    if (_fired) return;
+    _fired = true;
+    AlarmHaptics.dismissed();
+    widget.onDismiss();
+  }
+
+  void _snooze() {
+    if (_fired) return;
+    _fired = true;
+    AlarmHaptics.snoozed();
+    widget.onSnooze();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final light = theme.brightness == Brightness.light;
+    final active = widget.active;
+    final up = _drag < 0;
     return Material(
       color: light ? const Color(0xFFFFF5DF) : theme.colorScheme.surface,
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Spacer(),
-              Icon(
-                Icons.notifications_active,
-                size: 72,
-                color: theme.colorScheme.primary,
-              ),
-              const SizedBox(height: 20),
-              Text(
-                active.alarm.label,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.headlineSmall,
-              ),
-              const SizedBox(height: 18),
-              Text(
-                '正在叫的是',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                active.sound.cnName,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.displaySmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: theme.colorScheme.primary,
+      child: GestureDetector(
+        // opaque：整屏都能起手，不用瞄准任何控件。
+        behavior: HitTestBehavior.opaque,
+        onVerticalDragUpdate: _handleUpdate,
+        onVerticalDragEnd: _handleEnd,
+        onVerticalDragCancel:
+            () => setState(() {
+              _drag = 0;
+              _passed = false;
+            }),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(28, 16, 28, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _SwipeHint(
+                  icon: Icons.keyboard_arrow_up,
+                  label: '上滑关闭闹钟',
+                  activeLabel: '松手关闭闹钟',
+                  active: _passed && up,
+                  progress: _drag < 0 ? (-_drag / _threshold).clamp(0, 1) : 0,
                 ),
-              ),
-              const Spacer(),
-              FilledButton.icon(
-                onPressed: onDismiss,
-                icon: const Icon(Icons.alarm_off),
-                label: const Text('关闭闹钟'),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                Expanded(
+                  // 内容跟着手指走一点点，手势有「拖得动」的实感。
+                  child: Transform.translate(
+                    offset: Offset(0, _drag * 0.35),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.notifications_active,
+                          size: 68,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(height: 18),
+                        Text(
+                          active.alarm.label,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.headlineSmall,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          '正在叫的是',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          active.sound.cnName,
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.displaySmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          '来源：${active.sound.source}',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: onSnooze,
-                icon: const Icon(Icons.snooze),
-                label: const Text('贪睡 5 分钟'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                FilledButton.icon(
+                  onPressed: _dismiss,
+                  icon: const Icon(Icons.alarm_off),
+                  label: const Text('关闭闹钟'),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '来源：${active.sound.source}',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall,
-              ),
-            ],
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: _snooze,
+                  icon: const Icon(Icons.snooze),
+                  label: const Text('贪睡 5 分钟'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _SwipeHint(
+                  icon: Icons.keyboard_arrow_down,
+                  label: '下滑贪睡 5 分钟',
+                  activeLabel: '松手贪睡 5 分钟',
+                  active: _passed && !up,
+                  progress: _drag > 0 ? (_drag / _threshold).clamp(0, 1) : 0,
+                ),
+              ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 响铃遮罩上下两条滑动提示。跟着手指的位移变亮变粗，越过阈值换成「松手就…」。
+class _SwipeHint extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String activeLabel;
+  final bool active;
+  final double progress;
+
+  const _SwipeHint({
+    required this.icon,
+    required this.label,
+    required this.activeLabel,
+    required this.active,
+    required this.progress,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color =
+        Color.lerp(
+          theme.colorScheme.onSurfaceVariant,
+          theme.colorScheme.primary,
+          progress,
+        )!;
+    return AnimatedOpacity(
+      opacity: 0.55 + 0.45 * progress,
+      duration: const Duration(milliseconds: 120),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 20 + 6 * progress, color: color),
+          const SizedBox(width: 6),
+          Text(
+            active ? activeLabel : label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
