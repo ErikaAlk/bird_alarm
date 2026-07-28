@@ -104,7 +104,8 @@ void main() {
     await tester.tap(find.text('检查闹钟权限'));
     await tester.pumpAndSettle();
 
-    expect(find.text('权限自检'), findsOneWidget);
+    // 现在是推入的独立页面（不再是底部浮层），大标题栏会同时渲染折叠态与展开态的标题。
+    expect(find.text('权限自检'), findsWidgets);
     // 缺的那一项要能看出来、并给出「去开启」。
     expect(find.text('有 1 项还没开，点右边去开启。'), findsOneWidget);
     expect(find.text('去开启'), findsOneWidget);

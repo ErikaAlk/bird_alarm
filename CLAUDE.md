@@ -67,7 +67,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - **「查失败」和「确实没有」必须分开**（`BirdPhotoStatus.failed` / `.none`）：失败**不写缓存**、下次重试；「确实没有」写一条 7 天过期的记录。早期版本把两者都记成空字符串，结果第一次没网之后照片永远出不来。
   - **图片自己下载到本地再显示**（`BirdPhotos.imageFile`，按学名一个文件）：`Image.network` 没有超时，手机上 CDN 卡住会一直转、看着就是「图加载不出来」；自己下能设超时(25s)、能缓存、能明确报失败并支持点一下重试。
   - **署名不能省**：CC BY / BY-NC 要求标作者与许可证，卡片右下角那行就是干这个的。
-- **权限自检要「看得见」**：`checkAlarmPermissions` 返回四项布尔（通知含 `areNotificationsEnabled`、全屏通知、精确闹钟、电池不受限），`openPermissionSetting(type)` 跳对应设置页、失败一律退回应用详情页。设置页那颗按钮开 `_PermissionCheckSheet`（`resumed` 时自动重查）。**别再让它「有问题才有反应」**——旧版权限齐全时什么都不做，用户以为按钮坏了。
+- **右侧 ">" 箭头 = 进下一页**：带 chevron 的设置行必须 `Navigator.push` 一个页面（转场是主题里的 Cupertino 横推），**别弹底部浮层**——用户明确反馈过「点带箭头的行却从底下弹出浮层」很别扭。就地执行的动作（测试闹钟）用「运行」字样，跳外部浏览器用 `open_in_new`，都不要用箭头。
+- **权限自检要「看得见」**：`checkAlarmPermissions` 返回四项布尔（通知含 `areNotificationsEnabled`、全屏通知、精确闹钟、电池不受限），`openPermissionSetting(type)` 跳对应设置页、失败一律退回应用详情页。设置页那颗按钮推入 `_PermissionCheckPage`（`resumed` 时自动重查）。**别再让它「有问题才有反应」**——旧版权限齐全时什么都不做，用户以为按钮坏了。
 - **响铃遮罩的盲操手势**：`AlarmOverlay` 整屏 `onVerticalDragUpdate/End`——**上滑关闭、下滑贪睡**，阈值 120px 或甩动 900px/s，**松手才执行**。越过阈值震一记极短、关闭震一记长（380ms/255）、贪睡震三记短——**三种必须能闭眼分辨**，摸黑时这是唯一能确认自己干了什么的信号。
   震动走原生 `vibrate` 方法（`Vibrator` + `VibrationEffect` 指定振幅 + `USAGE_ALARM`），**别退回 Flutter 的 `HapticFeedback`**：那个走系统触感反馈，强度由系统设置决定、实测基本感觉不到。manifest 里的 `VIBRATE` 权限是必需的（缺了 `Vibrator` 静默失败、什么也不震）。阈值别调小（半梦半醒蹭一下就关掉闹钟是灾难），也别改成单击/双击（拿起手机就误触）。`test/alarm_overlay_test.dart` 守住这几条。
 - **列表项别用左滑手势**：整页要留给 `PageView` 左右滑动切 Tab，闹钟卡片再做「左滑删除」会抢手势（手指落在卡片上一划就变成拖删除条，页翻不动）。删除走**长按卡片**或编辑弹窗里的删除按钮，两处共用 `showDeleteAlarmDialog`。
