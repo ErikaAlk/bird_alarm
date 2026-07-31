@@ -91,9 +91,13 @@ flutter test      # 5 个测试文件 / 18 个用例
 
 ```powershell
 .\install.ps1          # 按设备架构构建 release + adb 覆盖安装 + 启动
-.\install.ps1 -Wsl     # 同上，但构建挪进 WSL：整套约 32 秒（Windows 上光 Gradle 就 50~84 秒）
+.\install.ps1 -Wsl     # 同上，但构建挪进 WSL：整套约 31 秒（Windows 上光 Gradle 就 50~84 秒）
 .\install.ps1 -AllAbi  # 发版：三个架构都出
 ```
+
+`-Wsl` 会先把 Windows 的 `~/.android/debug.keystore` 同步进 WSL：release 是用 **debug 签名**打的
+（见 `android/app/build.gradle.kts`），两边 keystore 不同的话，WSL 出的包装不上 Windows 装过的应用
+（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），只能卸载重装、闹钟和设置全丢。
 
 手工构建等价于：
 
@@ -142,6 +146,8 @@ WSL 里是**独立的一份 clone**（`~/bird_alarm`，Flutter 在 `~/flutter/bi
     发版要三个包加 `-AllAbi`。
   - **新增 `-Wsl`**：把 Windows 工作树 rsync 到 WSL 的 ext4 上构建、产物拷回来再用 Windows 的 adb 装机。
     实测同步 7 秒 + 构建 25 秒 ≈ **31 秒**，而 Windows 侧光 Gradle 段就 50~84 秒（守护进程日志实测）。
+    顺带同步 Windows 的 `debug.keystore`——不同步的话 WSL 出的包和手机上装着的签名不一致，
+    只能卸载重装（闹钟和设置全没）。换过 keystore 还要删掉已有 APK 产物强制重新签名。
     Gradle 这种海量小文件构建在 C 盘 NTFS + Defender 实时扫描下就是慢，这也是隔壁「元件库存管家」
     编译看着快的主要原因（那个项目在 WSL 里热构建 21 秒，本项目 25~27 秒，两者本身差不多）。
   - **先连设备再构建**：没插手机当场报错，不用等构建跑完才发现白等一轮；多设备可 `-Serial` 指定。

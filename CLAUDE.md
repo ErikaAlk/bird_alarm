@@ -55,6 +55,12 @@ java.io.IOException: Unable to establish loopback connection
 把 Windows 工作树 rsync 到 WSL 的 ext4 上构建再拷回，实测整套 31~32 秒（改一行 Dart 重新构建），
 Windows 侧 Gradle 那条路径原样保留。
 
+- **跨环境构建必须共用同一个 debug keystore**：release 用的是 **debug 签名**（`build.gradle.kts` 里写死的），
+  WSL 有自己的 `~/.android/debug.keystore`，两边签出来的包互相装不上
+  （`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），adb 只能卸载重装 —— **闹钟和设置全丢**。
+  `install.ps1 -Wsl` 已经在每次构建前把 Windows 的 keystore 同步进 WSL；换 keystore 之后
+  还要删掉已有 APK 产物，否则 AGP 认为产物是最新的、不会重新签名。
+
 - **构建路径（已验证可用）**：WSL2 Arch（distro `archlinux`，用户 `erika`），仓库 clone 在 **`~/bird_alarm`**
   （Linux 原生盘，别放 `/mnt/c`，跨盘 I/O 极慢）；Flutter 在 `~/flutter/bin/flutter`，JDK 是
   **Temurin 17**（`java -version` → `17.0.19`）。2026-07-30 在这里成功产出 arm64-v8a / armeabi-v7a release APK。
