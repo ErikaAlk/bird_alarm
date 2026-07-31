@@ -65,7 +65,67 @@ iOS 系统限制后台应用运行，建议将 App 保留在前台（锁屏前�
 
 在鸟声库中点击搜索，输入鸟种名称（中文、英文或学名均可）即可从 xeno-canto 获取录音列表。如需更高请求额度，可在设置中填入个人 xeno-canto API Key。
 
+## 开发与构建
+
+> 这一节是给「下一次接着改」的人看的：现在是什么状态、怎么跑起来、坑在哪。
+> 架构细节和不该破坏的不变量在 [`CLAUDE.md`](CLAUDE.md)。
+
+### 现在是什么状态（2026-07-30 核对）
+
+- 版本 **v1.4.1+36**。功能开发已收敛，**没有做到一半的活**，也没有排好的下一步——等真机用出问题再改。
+- **所有分支都已合进 `master`**（最后一个是 PR #16「盲操手势」，2026-07-28 合并），**没有待合并的 PR**。
+  本地留下的 `feat/*` / `fix/*` 分支都是已合并的残留。
+- **本地 `master` 落后 25 个提交**，动手前先 `git checkout master && git pull`，别在旧 master 上开分支。
+- 自验：`flutter analyze` 无问题、`flutter test` 18 个用例全过（2026-07-30 实跑）。
+- **还没验的**：v1.4.1 的盲操手势（上滑关闭 / 下滑贪睡 + 三种震动）**是否在真机上摸黑试过，没有记录**。
+  阈值和震动强度只有闭着眼在真机上试才知道合不合适，装机后建议优先验这个。
+
+### 怎么跑起来
+
+```bash
+flutter analyze   # Dart 改动的主要自验手段，不走 Gradle，秒级返回
+flutter test      # 5 个测试文件 / 18 个用例
+```
+
+出 APK：
+
+```bash
+wsl -d archlinux -- bash -lc 'cd ~/bird_alarm && ~/flutter/bin/flutter build apk --release --split-per-abi'
+```
+
+一律用 **release** 并按架构拆分，产物在 `build/app/outputs/flutter-apk/app-<abi>-release.apk`
+（arm64-v8a / armeabi-v7a / x86_64），装机和发版都以此为准。
+
+### 坑：Windows 上构建不出 APK，要去 WSL
+
+在这台开发机上，**Windows 端的 Gradle 守护进程起不来**，`flutter build apk` 会直接失败：
+
+```
+java.io.IOException: Unable to establish loopback connection
+```
+
+2026-07-30 排查过一轮，已经排除的猜测：换普通终端（非沙箱）**没用**，
+`gradle.properties` 里加 `-Djava.net.preferIPv4Stack=true`、再额外设 `GRADLE_OPTS` 同样的值，
+**也没用**（IPv4 回环本身是通的，是 `Selector.open()` 那对 socket 建不起来）。
+**别再在 Windows 侧调 Gradle 了**，APK 一律在 WSL2 Arch 里出——那边（`~/bird_alarm`，
+Flutter 在 `~/flutter/bin/flutter`，JDK Temurin 17）已验证能正常产出 release 包。
+
+WSL 里是**独立的一份 clone**，有自己的分支和未提交改动，构建前先 `git fetch && git pull` 对齐，
+别默认它跟 Windows 侧一致。Dart 侧的 `flutter analyze` / `flutter test` 不走 Gradle，在 Windows 上照常用。
+
 ## 更新记录
+
+### 构建与文档（2026-07-30，仍是 v1.4.1，不改 App 行为）
+
+- **README / CLAUDE.md 补上跨会话交接所需的内容**：README 新增「开发与构建」一节（当前状态、怎么跑、
+  Windows 构建不通要去 WSL），CLAUDE.md 顶部新增「当前状态」一段。以前这两份文档只写了「改过什么」，
+  没写「现在停在哪、下一步是什么、怎么才能构建出包」——换个会话接手对不上号。
+- **纠正一条会误导人的构建注释**：`gradle.properties` 里原先写着「强制走 IPv4 即可」解决 Windows 的
+  loopback 报错。实测**不成立**——加了那行、再额外设 `GRADLE_OPTS`，沙箱内外都照样起不来。注释已改成
+  实测结论，并指向 WSL 这条真正能用的构建路径，省得下一个人再照着试一遍。
+- **构建配置瘦身**：Gradle 堆从 `-Xmx8G/4G metaspace` 降到 `-Xmx4G/1G`（这机器 31G 内存平时只剩 ~3G 空闲，
+  8G 堆会让守护进程边构建边换页），打开 `parallel` / `caching`，关掉 `enableJetifier`
+  （本项目插件全是 AndroidX，用不上这层每次构建都要跑一遍的依赖改写）。这份配置在 WSL 侧实测能构建出 release 包。
 
 ### v1.4.1（2026-07-27）
 
