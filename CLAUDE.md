@@ -28,12 +28,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `flutter analyze` —— **Dart 改动的主要自验手段**（不需要 Gradle，秒级返回；改完 Dart 必跑）。
 - `flutter test` —— 5 个测试文件、共 18 个用例：`test/widget_test.dart`（首页渲染冒烟 + 滑动切页 + 星期格尺寸/双击 + 设置页 + 权限自检页）、`test/alarm_overlay_test.dart`（响铃遮罩的盲操手势与三种震法）、`test/bird_photos_test.dart`（每日一鸟照片的取图/缓存/失败重试）、`test/daily_birds_test.dart`（每日一鸟挑选规则）、`test/countdown_text_test.dart`（还有多久响铃的文案）。
 - **想「看一眼」UI 改动**：临时写个 golden 测试把页面渲染成 PNG（`expectLater(find.byType(BirdAlarmApp), matchesGoldenFile('preview/x.png'))` + `flutter test --update-goldens`），再直接看图；比装机快得多，配色/间距/深色适配一看便知。注意测试字体没有中文，**汉字会显示成方块**，只能判断布局与配色，看完把临时文件删掉别提交。
-- `flutter build apk --release --split-per-abi` —— **默认构建方式**（含 Kotlin 的完整构建，能验证原生改动）。**一律用 release，不再用 debug**；按架构拆分，产物 `build\app\outputs\flutter-apk\app-<abi>-release.apk`（arm64-v8a / armeabi-v7a / x86_64）。装机/发版都以此为准。
-- `.\install.ps1` —— 构建 release 拆分包 + adb 覆盖安装 + 启动，**默认装 arm64-v8a**。参数 `-Abi armeabi-v7a|x86_64`（换架构）/ `-NoBuild`（用已有包）/ `-NoLaunch`。pwsh 7 下直接在终端跑即可（`LocalMachine` 执行策略 `RemoteSigned`，本地脚本放行，不再需要旧的 `install.bat` 绕执行策略包装器）。
+- `flutter build apk --release --split-per-abi --target-platform android-arm64` —— **日常装机的构建方式**（含 Kotlin 的完整构建，能验证原生改动）。**一律用 release，不再用 debug**；产物 `build\app\outputs\flutter-apk\app-arm64-v8a-release.apk`。
+  **别再无脑三架构全出**：不带 `--target-platform` 时 arm64-v8a / armeabi-v7a / x86_64 每次各构建一遍，Dart AOT（gen_snapshot）是按架构各跑一遍的，而装机只用得上一个。WSL 实测同一份代码：单架构 27 秒 vs 三架构 36 秒（Windows 上还要多打包签名两个 APK，差得更多）。**发版**才用完整的 `--split-per-abi`。
+- `.\install.ps1` —— 构建 + adb 覆盖安装 + 启动。**架构按设备的 `ro.product.cpu.abi` 自动定**（`-Abi` 可手动指定）；**先连设备再构建**（没插手机当场报错，不用等构建跑完才发现白等）；`pubspec.yaml` 没动过自动加 `--no-pub`（省掉每次 7~20 秒的依赖解析）；装完报总耗时，包比源码旧会警告。
+  参数：`-Wsl`（构建挪进 WSL，见下，**整套约 32 秒 vs Windows 60~95 秒**）/ `-AllAbi`（发版出三个包）/ `-NoBuild` / `-NoInstall`（只出包，不需要连手机）/ `-NoLaunch` / `-Logcat` / `-Serial` / `-Force`。
+  pwsh 7 下直接在终端跑即可（`LocalMachine` 执行策略 `RemoteSigned`，本地脚本放行，不再需要旧的 `install.bat` 绕执行策略包装器）。
 
-### 构建环境：**APK 在 WSL2 Arch 里出，别在 Windows 上死磕**
+### 构建环境：**agent 出 APK 一律走 WSL2 Arch；用户在 Windows 终端照常构建**
 
-这台机器上 **Windows 端的 Gradle 构建是坏的**，会卡在守护进程起不来：
+**agent 的 shell 里** Gradle 起不来，会卡在守护进程上：
 
 ```
 java.io.IOException: Unable to establish loopback connection
@@ -42,7 +45,15 @@ java.io.IOException: Unable to establish loopback connection
 2026-07-30 实测排除过：**沙箱 shell 里失败，关掉沙箱的普通 shell 里一样失败**；`gradle.properties` 里加
 `-Djava.net.preferIPv4Stack=true`、再额外设 `GRADLE_OPTS=-Djava.net.preferIPv4Stack=true`，**都没用**
 （IPv4 回环本身是通的，`Selector.open()` 那对 socket 还是建不起来）。所以：
-**别再花时间在 Windows 侧调 Gradle**，`flutter build apk` 直接去 WSL 跑。
+**别再花时间在这上面**，agent 要 `flutter build apk` 就直接去 WSL 跑。
+
+**但别把这条写成「这台机器的 Windows 构建是坏的」**——用户自己的普通终端里一直是好的：
+`~/.gradle/daemon/8.14/daemon-*.out.log` 里 2026-06-23 ~ 07-27 每次构建都有记录，
+成对的 `Command execution: started/completed` 算出来 **Gradle 段 50.6 / 69.9 / 75.2 秒**（07-27 那轮三次），
+`build\app\outputs\flutter-apk\` 里 07-27 18:43 的三个 APK 也对得上。用户嫌慢的就是这个 60~95 秒
+（Gradle 段 + 前面 7~20 秒的 pub），不是构建不出来。**`.\install.ps1 -Wsl` 就是为这个加的**：
+把 Windows 工作树 rsync 到 WSL 的 ext4 上构建再拷回，实测整套 31~32 秒（改一行 Dart 重新构建），
+Windows 侧 Gradle 那条路径原样保留。
 
 - **构建路径（已验证可用）**：WSL2 Arch（distro `archlinux`，用户 `erika`），仓库 clone 在 **`~/bird_alarm`**
   （Linux 原生盘，别放 `/mnt/c`，跨盘 I/O 极慢）；Flutter 在 `~/flutter/bin/flutter`，JDK 是
