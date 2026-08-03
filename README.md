@@ -155,6 +155,11 @@ WSL 里是**独立的一份 clone**（`~/bird_alarm`，Flutter 在 `~/flutter/bi
     `.flutter-plugins-dependencies` 还在——那个文件是 pub 写的，缺了跳过 pub 会编译失败）。
   - 装完报总耗时；包比源码旧会警告（免得以为装的是刚改的）；安装失败按签名不一致 / 存储不足 /
     版本降级分开给提示，卸载重装前先问一句（会清空闹钟和设置）。
+- **试了 Gradle 配置缓存，用不了**：隔壁「元件库存管家」开着 `org.gradle.configuration-cache`
+  （空跑一轮 5 秒，日志里能看到 `Configuration cache entry reused`），本项目照抄**直接构建失败**——
+  Flutter 自己的 Gradle 插件不兼容：`:app:ReleaseMinSdkCheck` 的 task action 里抓着 AGP 的
+  `ProjectServices`，序列化不出去。结论写进 `gradle.properties` 了，省得下次再试。
+  那边能开是因为它是纯 AGP + Kotlin 工程，没有 Flutter 这层插件。
 - **README / CLAUDE.md 补上跨会话交接所需的内容**：README 新增「开发与构建」一节（当前状态、怎么跑、
   Windows 构建不通要去 WSL），CLAUDE.md 顶部新增「当前状态」一段。以前这两份文档只写了「改过什么」，
   没写「现在停在哪、下一步是什么、怎么才能构建出包」——换个会话接手对不上号。

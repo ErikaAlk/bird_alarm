@@ -77,6 +77,10 @@ Windows 侧 Gradle 那条路径原样保留。
 - `android/gradle.properties` 现在是 `-Xmx4G -XX:MaxMetaspaceSize=1G` + `parallel` + `caching`，
   且 **`enableJetifier` 已关**（本项目插件全是 AndroidX，用不上这层每次构建都要跑的改写）。
   **别把堆调回 8G**——这机器 31G 内存平时只剩 ~3G 空闲，8G 堆会让守护进程边构建边换页。
+  **`org.gradle.configuration-cache` 别开**：2026-07-30 实测直接构建失败，
+  `:app:ReleaseMinSdkCheck`（Flutter 插件的 `DependencyVersionChecker`）的 task action 抓着 AGP 的
+  `ProjectServices`，序列化不了（`field builtInKotlinServices$delegate … error writing value`）。
+  隔壁「元件库存管家」能开是因为它是纯 AGP + Kotlin 工程，没有 Flutter 这层插件——**别照抄过来**。
 
 ## 架构：Flutter UI + 原生 Android 闹钟引擎
 
