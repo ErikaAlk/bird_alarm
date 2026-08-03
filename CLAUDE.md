@@ -6,23 +6,85 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **只针对 Android**——iOS 不维护，改动时无需考虑 iOS。这是 [ErikaAlk](https://github.com/ErikaAlk/bird_alarm)
 基于个人使用习惯对原作者项目的 fork，所有改动仅为自用。
 
+## 当前状态（接手先读这段）
+
+*最后核对：2026-07-30。改动落地后请顺手更新这一段，别让它烂掉。*
+
+- **版本 v1.4.1+36**，功能开发已收敛，**没有做到一半的活**，也**没有既定的下一步计划**——等真机用出问题再改。
+- **所有分支都已合进 `origin/master`**（最后一个是 PR #16「盲操手势」，2026-07-28 合并），当前**无未合并 PR**。
+  本地的 `feat/*` / `fix/*` / `claude/*` 分支全是已合并的残留，可删。
+- ⚠️ **本地 `master` 是旧的（落后 25 个提交）**。接手第一件事：`git checkout master && git pull`，
+  别在旧 master 上开分支。`.claude/worktrees/` 下还挂着两个旧 worktree（`priceless-mayer-663f67`、
+  `vigilant-snyder-ccfd94`），也都已合并，可 `git worktree remove`。
+- **自验状态**（2026-07-30 实跑）：`flutter analyze` 无问题；`flutter test` **18 个用例全过**。
+- ⚠️ **未确认**：v1.4.1 的盲操手势（上滑关闭 / 下滑贪睡 + 三种震动）**有没有在真机上摸黑实测过，没有记录**。
+  阈值和震动强度只有闭着眼在真机上试才知道合不合适——装机后请优先验这个。
+- ⚠️ **WSL clone（`~/bird_alarm`）里有一行调试残留**：`lib/main.dart` 末尾多了 `// probe new1`
+  （验证构建有没有吃到改动时留下的），未提交。下次在 WSL 构建前先 `git checkout lib/main.dart` 清掉。
+
 ## 环境与命令
 
 - Flutter 在 `C:\dev\flutter\bin`（**不一定在 PATH 上**；脚本里用全路径或 `$env:Path += ";C:\dev\flutter\bin"`）。Dart 3.12 / Flutter 3.44。
 - `flutter analyze` —— **Dart 改动的主要自验手段**（不需要 Gradle，秒级返回；改完 Dart 必跑）。
-- `flutter test` —— `test/widget_test.dart`（首页渲染冒烟 + 滑动切页 + 星期格尺寸/双击 + 设置页）、`test/daily_birds_test.dart`（每日一鸟挑选规则）与 `test/countdown_text_test.dart`（还有多久响铃的文案）。
+- `flutter test` —— 5 个测试文件、共 18 个用例：`test/widget_test.dart`（首页渲染冒烟 + 滑动切页 + 星期格尺寸/双击 + 设置页 + 权限自检页）、`test/alarm_overlay_test.dart`（响铃遮罩的盲操手势与三种震法）、`test/bird_photos_test.dart`（每日一鸟照片的取图/缓存/失败重试）、`test/daily_birds_test.dart`（每日一鸟挑选规则）、`test/countdown_text_test.dart`（还有多久响铃的文案）。
 - **想「看一眼」UI 改动**：临时写个 golden 测试把页面渲染成 PNG（`expectLater(find.byType(BirdAlarmApp), matchesGoldenFile('preview/x.png'))` + `flutter test --update-goldens`），再直接看图；比装机快得多，配色/间距/深色适配一看便知。注意测试字体没有中文，**汉字会显示成方块**，只能判断布局与配色，看完把临时文件删掉别提交。
-- `flutter build apk --release --split-per-abi` —— **默认构建方式**（含 Kotlin 的完整构建，能验证原生改动）。**一律用 release，不再用 debug**；按架构拆分，产物 `build\app\outputs\flutter-apk\app-<abi>-release.apk`（arm64-v8a / armeabi-v7a / x86_64）。装机/发版都以此为准。
-- `.\install.ps1` —— 构建 release 拆分包 + adb 覆盖安装 + 启动，**默认装 arm64-v8a**。参数 `-Abi armeabi-v7a|x86_64`（换架构）/ `-NoBuild`（用已有包）/ `-NoLaunch`。pwsh 7 下直接在终端跑即可（`LocalMachine` 执行策略 `RemoteSigned`，本地脚本放行，不再需要旧的 `install.bat` 绕执行策略包装器）。
+- `flutter build apk --release --split-per-abi --target-platform android-arm64` —— **日常装机的构建方式**（含 Kotlin 的完整构建，能验证原生改动）。**一律用 release，不再用 debug**；产物 `build\app\outputs\flutter-apk\app-arm64-v8a-release.apk`。
+  **别再无脑三架构全出**：不带 `--target-platform` 时 arm64-v8a / armeabi-v7a / x86_64 每次各构建一遍，Dart AOT（gen_snapshot）是按架构各跑一遍的，而装机只用得上一个。WSL 实测同一份代码：单架构 27 秒 vs 三架构 36 秒（Windows 上还要多打包签名两个 APK，差得更多）。**发版**才用完整的 `--split-per-abi`。
+- `.\install.ps1` —— 构建 + adb 覆盖安装 + 启动。**架构按设备的 `ro.product.cpu.abi` 自动定**（`-Abi` 可手动指定）；**先连设备再构建**（没插手机当场报错，不用等构建跑完才发现白等）；`pubspec.yaml` 没动过自动加 `--no-pub`（省掉每次 7~20 秒的依赖解析）；装完报总耗时，包比源码旧会警告。
+  参数：`-Wsl`（构建挪进 WSL，见下，**整套约 32 秒 vs Windows 60~95 秒**）/ `-AllAbi`（发版出三个包）/ `-NoBuild` / `-NoInstall`（只出包，不需要连手机）/ `-NoLaunch` / `-Logcat` / `-Serial` / `-Force`。
+  pwsh 7 下直接在终端跑即可（`LocalMachine` 执行策略 `RemoteSigned`，本地脚本放行，不再需要旧的 `install.bat` 绕执行策略包装器）。
 
-构建环境注意：
+### 构建环境：**agent 出 APK 一律走 WSL2 Arch；用户在 Windows 终端照常构建**
+
+**agent 的 shell 里** Gradle 起不来，会卡在守护进程上：
+
+```
+java.io.IOException: Unable to establish loopback connection
+```
+
+2026-07-30 实测排除过：**沙箱 shell 里失败，关掉沙箱的普通 shell 里一样失败**；`gradle.properties` 里加
+`-Djava.net.preferIPv4Stack=true`、再额外设 `GRADLE_OPTS=-Djava.net.preferIPv4Stack=true`，**都没用**
+（IPv4 回环本身是通的，`Selector.open()` 那对 socket 还是建不起来）。所以：
+**别再花时间在这上面**，agent 要 `flutter build apk` 就直接去 WSL 跑。
+
+**但别把这条写成「这台机器的 Windows 构建是坏的」**——用户自己的普通终端里一直是好的：
+`~/.gradle/daemon/8.14/daemon-*.out.log` 里 2026-06-23 ~ 07-27 每次构建都有记录，
+成对的 `Command execution: started/completed` 算出来 **Gradle 段 50.6 / 69.9 / 75.2 秒**（07-27 那轮三次），
+`build\app\outputs\flutter-apk\` 里 07-27 18:43 的三个 APK 也对得上。用户嫌慢的就是这个 60~95 秒
+（Gradle 段 + 前面 7~20 秒的 pub），不是构建不出来。**`.\install.ps1 -Wsl` 就是为这个加的**：
+把 Windows 工作树 rsync 到 WSL 的 ext4 上构建再拷回，实测整套 31~32 秒（改一行 Dart 重新构建），
+Windows 侧 Gradle 那条路径原样保留。
+
+- **跨环境构建必须共用同一个 debug keystore**：release 用的是 **debug 签名**（`build.gradle.kts` 里写死的），
+  WSL 有自己的 `~/.android/debug.keystore`，两边签出来的包互相装不上
+  （`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），adb 只能卸载重装 —— **闹钟和设置全丢**。
+  `install.ps1 -Wsl` 已经在每次构建前把 Windows 的 keystore 同步进 WSL；换 keystore 之后
+  还要删掉已有 APK 产物，否则 AGP 认为产物是最新的、不会重新签名。
+
+- **构建路径（已验证可用）**：WSL2 Arch（distro `archlinux`，用户 `erika`），仓库 clone 在 **`~/bird_alarm`**
+  （Linux 原生盘，别放 `/mnt/c`，跨盘 I/O 极慢）；Flutter 在 `~/flutter/bin/flutter`，JDK 是
+  **Temurin 17**（`java -version` → `17.0.19`）。2026-07-30 在这里成功产出 arm64-v8a / armeabi-v7a release APK。
+
+  ```bash
+  wsl -d archlinux -- bash -lc 'cd ~/bird_alarm && ~/flutter/bin/flutter build apk --release --split-per-abi'
+  ```
+
+  产物在 WSL 侧 `~/bird_alarm/build/app/outputs/flutter-apk/`，Windows 可从
+  `\\wsl$\archlinux\home\erika\bird_alarm\...` 取。**注意 WSL 是独立的 clone**——它有自己的分支和
+  未提交改动，构建前先在里面 `git fetch && git checkout <目标分支> && git pull` 对齐，别以为它跟 Windows 侧同步。
+- **Dart 改动不受影响**：`flutter analyze` / `flutter test` 不走 Gradle，在 Windows 上秒级返回，照常用。
 - 需要 **Android SDK Platform 36**（compileSdk=36）和 Windows **开发者模式**（Flutter 插件 symlink）。
-- Gradle daemon 在某些沙箱化的 shell 里会因 NIO loopback 失败（`PipeImpl ... Invalid argument: connect`），需在普通终端构建。
-- `android/gradle.properties` 设了 `-Xmx8G`；内存紧张时守护进程可能起不来。
+- `android/gradle.properties` 现在是 `-Xmx4G -XX:MaxMetaspaceSize=1G` + `parallel` + `caching`，
+  且 **`enableJetifier` 已关**（本项目插件全是 AndroidX，用不上这层每次构建都要跑的改写）。
+  **别把堆调回 8G**——这机器 31G 内存平时只剩 ~3G 空闲，8G 堆会让守护进程边构建边换页。
+  **`org.gradle.configuration-cache` 别开**：2026-07-30 实测直接构建失败，
+  `:app:ReleaseMinSdkCheck`（Flutter 插件的 `DependencyVersionChecker`）的 task action 抓着 AGP 的
+  `ProjectServices`，序列化不了（`field builtInKotlinServices$delegate … error writing value`）。
+  隔壁「元件库存管家」能开是因为它是纯 AGP + Kotlin 工程，没有 Flutter 这层插件——**别照抄过来**。
 
 ## 架构：Flutter UI + 原生 Android 闹钟引擎
 
-整个 app 是 **单文件 Flutter UI（`lib/main.dart`，~3800 行）** + **原生 Kotlin 闹钟引擎**，两者通过 MethodChannel `bird_alarm/system_alarm` 通信。
+整个 app 是 **单文件 Flutter UI（`lib/main.dart`，~5200 行）** + **原生 Kotlin 闹钟引擎**，两者通过 MethodChannel `bird_alarm/system_alarm` 通信。
 
 - **原生（Kotlin）是闹钟的真正执行者**，App 关闭也能响：
   - `MainActivity.kt` —— MethodChannel 桥（`scheduleAlarmAt`/`cancelAlarm`/`stopAlarmSound`/`snoozeAlarm`/`prepareAlarmWindow`/`releaseAlarmWindow`/`consumeLaunchAlarm`/`testSystemAlarm`/`transcodeAudio`/`updateSoundSettings`/`updateDownloadProgress`/`finishDownloadProgress`），并通过 `AlarmManager.setAlarmClock` + `setExactAndAllowWhileIdle` 排闹钟。**排闹钟时不再起前台服务**（那会整夜挂前台、是耗电元凶）；只排 `AlarmManager` 精确闹钟 + 发一条普通常驻「已守护」通知（`showGuardNotification`，id=`1011`）。
@@ -80,5 +142,5 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `origin` = `ErikaAlk`（用户的 fork）；`upstream` = 原作者 `oastwy`。**改动推到 `origin`，并在 `origin`（ErikaAlk 的库）上开 PR**，不直推默认分支。`gh` 默认仓库已设为 `ErikaAlk/bird_alarm`（`gh repo set-default`），开 PR 默认就落在用户自己的库上。
 - 每次改动同步 `README.md` 的「更新记录」（带日期 + `pubspec.yaml` 版本号，倒序置顶）与代码同提交。
-- 改版本号时记得同步 `lib/main.dart` 里 `_AboutPage._appVersion`（关于页显示的版本号，硬编码、需手动跟 `pubspec.yaml` 对齐）。「关于」页有「版本与来源」栏标明这是 ErikaAlk 的 fork、原作者是 `oastwy`，改关于页时务必保留原作者致谢与免责说明。
+- 改版本号时记得同步 `lib/main.dart` 里 **`_AboutPage.appVersion`**（关于页显示的版本号，硬编码、需手动跟 `pubspec.yaml` 对齐；现为 `'v1.4.1'` 对 `1.4.1+36`）。「关于」页有「版本与来源」栏标明这是 ErikaAlk 的 fork、原作者是 `oastwy`，改关于页时务必保留原作者致谢与免责说明。
 - `install.ps1` / `鸟瘾闹钟-修复方案.html` 已在 `.gitignore`，是本地工具/文档，不进版本库。

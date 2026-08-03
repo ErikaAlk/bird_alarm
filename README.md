@@ -65,7 +65,110 @@ iOS 系统限制后台应用运行，建议将 App 保留在前台（锁屏前�
 
 在鸟声库中点击搜索，输入鸟种名称（中文、英文或学名均可）即可从 xeno-canto 获取录音列表。如需更高请求额度，可在设置中填入个人 xeno-canto API Key。
 
+## 开发与构建
+
+> 这一节是给「下一次接着改」的人看的：现在是什么状态、怎么跑起来、坑在哪。
+> 架构细节和不该破坏的不变量在 [`CLAUDE.md`](CLAUDE.md)。
+
+### 现在是什么状态（2026-07-30 核对）
+
+- 版本 **v1.4.1+36**。功能开发已收敛，**没有做到一半的活**，也没有排好的下一步——等真机用出问题再改。
+- **所有分支都已合进 `master`**（最后一个是 PR #16「盲操手势」，2026-07-28 合并），**没有待合并的 PR**。
+  本地留下的 `feat/*` / `fix/*` 分支都是已合并的残留。
+- **本地 `master` 落后 25 个提交**，动手前先 `git checkout master && git pull`，别在旧 master 上开分支。
+- 自验：`flutter analyze` 无问题、`flutter test` 18 个用例全过（2026-07-30 实跑）。
+- **还没验的**：v1.4.1 的盲操手势（上滑关闭 / 下滑贪睡 + 三种震动）**是否在真机上摸黑试过，没有记录**。
+  阈值和震动强度只有闭着眼在真机上试才知道合不合适，装机后建议优先验这个。
+
+### 怎么跑起来
+
+```bash
+flutter analyze   # Dart 改动的主要自验手段，不走 Gradle，秒级返回
+flutter test      # 5 个测试文件 / 18 个用例
+```
+
+出 APK 并装机（Windows 普通终端，`install.ps1` 是本地工具、在 `.gitignore` 里）：
+
+```powershell
+.\install.ps1          # 按设备架构构建 release + adb 覆盖安装 + 启动
+.\install.ps1 -Wsl     # 同上，但构建挪进 WSL：整套约 31 秒（Windows 上光 Gradle 就 50~84 秒）
+.\install.ps1 -AllAbi  # 发版：三个架构都出
+```
+
+`-Wsl` 会先把 Windows 的 `~/.android/debug.keystore` 同步进 WSL：release 是用 **debug 签名**打的
+（见 `android/app/build.gradle.kts`），两边 keystore 不同的话，WSL 出的包装不上 Windows 装过的应用
+（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），只能卸载重装、闹钟和设置全丢。
+
+手工构建等价于：
+
+```bash
+flutter build apk --release --split-per-abi --target-platform android-arm64  # 日常：只出要装的那个架构
+flutter build apk --release --split-per-abi                                  # 发版：三个架构都出
+```
+
+一律用 **release**，产物在 `build/app/outputs/flutter-apk/app-<abi>-release.apk`
+（arm64-v8a / armeabi-v7a / x86_64），装机和发版都以此为准。
+**日常别无脑三架构全出**：Dart AOT 按架构各跑一遍，而装机只用得上一个（WSL 实测 27 秒 vs 36 秒）。
+
+### 坑：Gradle 在 agent 的 shell 里起不来（用户自己的终端没问题）
+
+Claude 的 shell 里跑 `flutter build apk` 会挂在 Gradle 守护进程上：
+
+```
+java.io.IOException: Unable to establish loopback connection
+```
+
+2026-07-30 排查过一轮：沙箱 shell 和关掉沙箱的普通 shell **都失败**，
+`gradle.properties` 里加 `-Djava.net.preferIPv4Stack=true`、再额外设 `GRADLE_OPTS` 同样的值，
+**也没用**（IPv4 回环本身是通的，是 `Selector.open()` 那对 socket 建不起来）。
+
+**但这不是「机器坏了」**——用户自己的普通终端里 Windows 构建一直是好的：`~/.gradle/daemon/*.log`
+里 2026-06-23 到 07-27 每次构建都有记录（Gradle 段实测 50~84 秒），`build\` 里 07-27 的 APK 也对得上。
+所以分工是：**用户照常在 Windows 终端构建**（嫌慢就 `.\install.ps1 -Wsl`，构建挪到 WSL 的 ext4 上，
+快一倍）；**agent 要出 APK 一律走 WSL**：
+
+```bash
+wsl -d archlinux -- bash -lc 'cd ~/bird_alarm && ~/flutter/bin/flutter build apk --release --split-per-abi'
+```
+
+WSL 里是**独立的一份 clone**（`~/bird_alarm`，Flutter 在 `~/flutter/bin/flutter`，JDK Temurin 17），
+有自己的分支和未提交改动，构建前先 `git fetch && git pull` 对齐，别默认它跟 Windows 侧一致。
+（`install.ps1 -Wsl` 不用这个 clone，它是把 Windows 的工作树 rsync 到 `~/bird_alarm-build` 再构建，
+所以**未提交的改动也能装机**。）Dart 侧的 `flutter analyze` / `flutter test` 不走 Gradle，在 Windows 上照常用。
+
 ## 更新记录
+
+### 构建与文档（2026-07-30，仍是 v1.4.1，不改 App 行为）
+
+- **装机脚本大改，日常一轮从 60~95 秒压到 31 秒**（`install.ps1`，本地工具、不进版本库）：
+  - **只构建要装的那一个架构**，架构直接读设备的 `ro.product.cpu.abi`。以前每次都出 arm64-v8a /
+    armeabi-v7a / x86_64 三个包，而装机只用得上一个——Dart AOT 是按架构各跑一遍的（WSL 实测 27 秒 vs 36 秒）。
+    发版要三个包加 `-AllAbi`。
+  - **新增 `-Wsl`**：把 Windows 工作树 rsync 到 WSL 的 ext4 上构建、产物拷回来再用 Windows 的 adb 装机。
+    实测同步 7 秒 + 构建 25 秒 ≈ **31 秒**，而 Windows 侧光 Gradle 段就 50~84 秒（守护进程日志实测）。
+    顺带同步 Windows 的 `debug.keystore`——不同步的话 WSL 出的包和手机上装着的签名不一致，
+    只能卸载重装（闹钟和设置全没）。换过 keystore 还要删掉已有 APK 产物强制重新签名。
+    Gradle 这种海量小文件构建在 C 盘 NTFS + Defender 实时扫描下就是慢，这也是隔壁「元件库存管家」
+    编译看着快的主要原因（那个项目在 WSL 里热构建 21 秒，本项目 25~27 秒，两者本身差不多）。
+  - **先连设备再构建**：没插手机当场报错，不用等构建跑完才发现白等一轮；多设备可 `-Serial` 指定。
+  - **`pubspec.yaml` 没动过就加 `--no-pub`**，省掉每次 7~20 秒的依赖解析（会同时确认
+    `.flutter-plugins-dependencies` 还在——那个文件是 pub 写的，缺了跳过 pub 会编译失败）。
+  - 装完报总耗时；包比源码旧会警告（免得以为装的是刚改的）；安装失败按签名不一致 / 存储不足 /
+    版本降级分开给提示，卸载重装前先问一句（会清空闹钟和设置）。
+- **试了 Gradle 配置缓存，用不了**：隔壁「元件库存管家」开着 `org.gradle.configuration-cache`
+  （空跑一轮 5 秒，日志里能看到 `Configuration cache entry reused`），本项目照抄**直接构建失败**——
+  Flutter 自己的 Gradle 插件不兼容：`:app:ReleaseMinSdkCheck` 的 task action 里抓着 AGP 的
+  `ProjectServices`，序列化不出去。结论写进 `gradle.properties` 了，省得下次再试。
+  那边能开是因为它是纯 AGP + Kotlin 工程，没有 Flutter 这层插件。
+- **README / CLAUDE.md 补上跨会话交接所需的内容**：README 新增「开发与构建」一节（当前状态、怎么跑、
+  Windows 构建不通要去 WSL），CLAUDE.md 顶部新增「当前状态」一段。以前这两份文档只写了「改过什么」，
+  没写「现在停在哪、下一步是什么、怎么才能构建出包」——换个会话接手对不上号。
+- **纠正一条会误导人的构建注释**：`gradle.properties` 里原先写着「强制走 IPv4 即可」解决 Windows 的
+  loopback 报错。实测**不成立**——加了那行、再额外设 `GRADLE_OPTS`，沙箱内外都照样起不来。注释已改成
+  实测结论，并指向 WSL 这条真正能用的构建路径，省得下一个人再照着试一遍。
+- **构建配置瘦身**：Gradle 堆从 `-Xmx8G/4G metaspace` 降到 `-Xmx4G/1G`（这机器 31G 内存平时只剩 ~3G 空闲，
+  8G 堆会让守护进程边构建边换页），打开 `parallel` / `caching`，关掉 `enableJetifier`
+  （本项目插件全是 AndroidX，用不上这层每次构建都要跑一遍的依赖改写）。这份配置在 WSL 侧实测能构建出 release 包。
 
 ### v1.4.1（2026-07-27）
 
