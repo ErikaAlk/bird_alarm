@@ -113,11 +113,17 @@ class BirdAlarmApp extends StatelessWidget {
 /// 浅色保留原来的奶油底色（App 的辨识度），深色用 iOS 系统灰阶而不是 M3 自动生成的紫调。
 ThemeData buildAppTheme(Brightness brightness) {
   final light = brightness == Brightness.light;
-  const seed = Color(0xFF1D7C76);
+  // 本项目认领的主题色：薄荷绿 #00D9A3（每个项目一种，表在全局 CLAUDE.md）
+  const seed = Color(0xFF00D9A3);
   final scheme = ColorScheme.fromSeed(
     seedColor: seed,
     brightness: brightness,
   ).copyWith(
+    // M3 从种子生成的 primary 会被调淡成中间调，这里直接钉死：
+    // 深色下用原色（对底 10.2:1），浅色下压深到 #007A5C——薄荷原色在奶油底上只有
+    // 1.75:1，而 primary 在这个 App 里还兼着图标和文字色，不压深就看不见
+    primary: light ? const Color(0xFF007A5C) : const Color(0xFF00D9A3),
+    onPrimary: light ? Colors.white : const Color(0xFF00281E),
     surface: light ? const Color(0xFFFFF5DF) : const Color(0xFF121214),
     surfaceContainerLowest: light ? Colors.white : const Color(0xFF1C1C1E),
     surfaceContainerHighest:
@@ -3264,8 +3270,8 @@ class _DailyBirdCardState extends State<_DailyBirdCard> {
           end: Alignment.bottomRight,
           colors:
               light
-                  ? const [Color(0xFF1D9A8A), Color(0xFF3FBFA0)]
-                  : const [Color(0xFF11534D), Color(0xFF1B7A6C)],
+                  ? const [Color(0xFF00C08F), Color(0xFF46E6BC)]
+                  : const [Color(0xFF00654E), Color(0xFF00A87E)],
         ),
       ),
       child: Column(
@@ -3390,7 +3396,7 @@ class _DailyBirdCardState extends State<_DailyBirdCard> {
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
                                 value: widget.progress,
-                                color: const Color(0xFF11534D),
+                                color: const Color(0xFF00382B),
                               ),
                             )
                             : const Icon(Icons.download, size: 20),
@@ -3432,7 +3438,7 @@ class _DailyBirdCardState extends State<_DailyBirdCard> {
 
   static final ButtonStyle _actionStyle = FilledButton.styleFrom(
     backgroundColor: Colors.white,
-    foregroundColor: const Color(0xFF11534D),
+    foregroundColor: const Color(0xFF00382B),
     disabledBackgroundColor: Colors.white70,
     padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
   );
