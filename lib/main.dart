@@ -4016,8 +4016,8 @@ class BirdPhotos {
 class _AboutPage extends StatelessWidget {
   const _AboutPage();
 
-  // 关于页展示的版本号——发版时与 pubspec.yaml 的 version 同步更新。设置页页脚也用它。
-  static const appVersion = 'v1.4.1';
+  // 关于页展示的版本号。发版时与 pubspec.yaml 的 version 同步更新，设置页页脚也用它。
+  static const appVersion = 'v1.5.1';
 
   @override
   Widget build(BuildContext context) {
@@ -4121,7 +4121,7 @@ class _AboutPage extends StatelessWidget {
                 Text('致谢', style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 10),
                 const Text(
-                  '内置鸟鸣来自 xeno-canto——一个由全球鸟友共同维护的野生鸟声共享平台。感谢以下录音的上传者，正是他们的记录让这个 App 成为可能。',
+                  '内置鸟鸣来自 xeno-canto，一个由全球鸟友共同维护的野生鸟声共享平台。感谢以下录音的上传者。',
                 ),
                 const SizedBox(height: 10),
                 const Text('四声杜鹃 · XC1101770', style: TextStyle(fontSize: 13)),
