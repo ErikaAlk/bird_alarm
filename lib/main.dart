@@ -661,7 +661,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   // 回到前台：课表可能在 Cadence 里改过（也可能刚授了读课表权限），变了就重排；
-  // 没变也补推一次光闹钟（上次可能不在宿舍 Wi-Fi、没推出去）。
+  // 没变也补推一次光闹钟（上次可能没网、没推出去）。
   Future<void> _refreshOnResume() async {
     if (!_loaded || _activeAlarm != null) return;
     if (await _refreshSchedule()) {
@@ -747,7 +747,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
               ? '$hhmm 已推送，接下来没有要亮灯的闹钟'
               : '$hhmm 已推送，下次亮灯 ${_shortDateTime(upcoming.first)}';
     } catch (_) {
-      appSettings.lightSyncStatus = '$hhmm 推送失败：连不上 HA。回到宿舍 Wi-Fi 后打开 App 会自动重试';
+      appSettings.lightSyncStatus = '$hhmm 推送失败：连不上 HA。下次打开 App 会自动重试';
     }
   }
 
@@ -4316,7 +4316,7 @@ class _AboutPage extends StatelessWidget {
   const _AboutPage();
 
   // 关于页展示的版本号。发版时与 pubspec.yaml 的 version 同步更新，设置页页脚也用它。
-  static const appVersion = 'v1.6.0';
+  static const appVersion = 'v1.6.1';
 
   @override
   Widget build(BuildContext context) {
@@ -4960,7 +4960,7 @@ class _SettingsTabState extends State<_SettingsTab> {
                       keyboardType: TextInputType.url,
                       autocorrect: false,
                       decoration: const InputDecoration(
-                        hintText: 'http://192.168.0.204/api/webhook/…',
+                        hintText: 'https://…/api/webhook/…',
                       ),
                       onSubmitted: (_) => _saveWebhook(),
                     ),
@@ -4970,7 +4970,7 @@ class _SettingsTabState extends State<_SettingsTab> {
                       builder:
                           (context, _) => Text(
                             appSettings.lightSyncStatus.isEmpty
-                                ? '每次排闹钟都会把接下来几次的亮灯时间推给 HA，由 HA 写进灯里。只在宿舍局域网里推得出去。'
+                                ? '每次排闹钟都会把接下来几次的亮灯时间推给 HA，由 HA 写进灯里。'
                                 : appSettings.lightSyncStatus,
                             style: TextStyle(
                               fontSize: 12,
