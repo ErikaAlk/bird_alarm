@@ -40,12 +40,39 @@ void main() {
     expect(CadenceSchedule.update(monday, 2, []), isTrue);
   });
 
+  test('「课表」闹钟一个管两种工作日，休息日不响', () {
+    const alarm = BirdAlarm(
+      id: 'c',
+      time: TimeOfDay(hour: 7, minute: 0),
+      repeatDays: {},
+      repeatRule: RepeatRule.classSchedule,
+      enabled: true,
+      label: '',
+      noEarlyTime: TimeOfDay(hour: 8, minute: 30),
+    );
+    CadenceSchedule.update(monday, 2, [_ms(9, 28, 8, 30), _ms(9, 29, 10, 20)]);
+    expect(
+      alarm.timeOn(DateTime(2026, 9, 28)),
+      const TimeOfDay(hour: 7, minute: 0),
+    );
+    expect(
+      alarm.timeOn(DateTime(2026, 9, 29)),
+      const TimeOfDay(hour: 8, minute: 30),
+    );
+    // 读取范围外的工作日：按早八
+    expect(
+      alarm.timeOn(DateTime(2026, 9, 30)),
+      const TimeOfDay(hour: 7, minute: 0),
+    );
+    expect(alarm.timeOn(DateTime(2026, 10, 3)), isNull);
+  });
+
   test('光闹钟时刻 = 响铃减提前量，去重升序', () {
     BirdAlarm alarm(int lead) => BirdAlarm(
       id: '$lead',
       time: const TimeOfDay(hour: 7, minute: 0),
       repeatDays: const {},
-      repeatRule: RepeatRule.earlyClass,
+      repeatRule: RepeatRule.classSchedule,
       enabled: true,
       label: '',
       lightLeadMinutes: lead,
@@ -57,10 +84,7 @@ void main() {
         (at, alarm(10)),
         (at.add(const Duration(minutes: 5)), alarm(15)),
       ]),
-      [
-        DateTime(2026, 9, 29, 6, 50),
-        DateTime(2026, 9, 30, 7),
-      ],
+      [DateTime(2026, 9, 29, 6, 50), DateTime(2026, 9, 30, 7)],
     );
   });
 }

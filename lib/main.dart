@@ -255,8 +255,8 @@ ThemeData buildAppTheme(Brightness brightness) {
 }
 
 /// 闹钟的重复规则：自定义星期 / 中国工作日 / 中国法定节假日 /
-/// 按 Cadence 课表的早八 / 无早八工作日（见 [scheduleDayOf]）。
-enum RepeatRule { weekdays, chinaWorkdays, chinaHolidays, earlyClass, noEarlyClass }
+/// 课表（工作日按 Cadence 课表分早八、无早八两个时间，见 [scheduleDayOf]）。
+enum RepeatRule { weekdays, chinaWorkdays, chinaHolidays, classSchedule }
 
 class BirdSound {
   final String id;
@@ -339,8 +339,11 @@ class BirdAlarm {
   final String label;
   // 光闹钟比鸟鸣提前多少分钟开始亮（0~30）。只在设置里打开「联动光闹钟」时生效。
   final int lightLeadMinutes;
+  // 「课表」规则下没有早八的工作日响这个时间；有早八那天响 [time]。其他规则不用它。
+  final TimeOfDay noEarlyTime;
 
   static const defaultLightLeadMinutes = 10;
+  static const defaultNoEarlyTime = TimeOfDay(hour: 8, minute: 30);
 
   const BirdAlarm({
     required this.id,
@@ -350,6 +353,7 @@ class BirdAlarm {
     required this.enabled,
     required this.label,
     this.lightLeadMinutes = defaultLightLeadMinutes,
+    this.noEarlyTime = defaultNoEarlyTime,
   });
 
   BirdAlarm copyWith({
@@ -359,6 +363,7 @@ class BirdAlarm {
     bool? enabled,
     String? label,
     int? lightLeadMinutes,
+    TimeOfDay? noEarlyTime,
   }) => BirdAlarm(
     id: id,
     time: time ?? this.time,
@@ -367,7 +372,24 @@ class BirdAlarm {
     enabled: enabled ?? this.enabled,
     label: label ?? this.label,
     lightLeadMinutes: lightLeadMinutes ?? this.lightLeadMinutes,
+    noEarlyTime: noEarlyTime ?? this.noEarlyTime,
   );
+
+  /// 这个闹钟在 [date] 那天几点响；那天不响返回 null。
+  TimeOfDay? timeOn(DateTime date) => switch (repeatRule) {
+    RepeatRule.classSchedule => switch (scheduleDayOf(date)) {
+      ScheduleDay.earlyClass => time,
+      ScheduleDay.workday => noEarlyTime,
+      ScheduleDay.holiday => null,
+    },
+    RepeatRule.chinaWorkdays =>
+      ChinaWorkdayCalendar.isWorkday(date) ? time : null,
+    // 休息日：法定节假日 + 正常放假的周末；调休补班日与普通工作日不响。
+    RepeatRule.chinaHolidays =>
+      ChinaWorkdayCalendar.isWorkday(date) ? null : time,
+    RepeatRule.weekdays =>
+      repeatDays.isEmpty || repeatDays.contains(date.weekday) ? time : null,
+  };
 
   static RepeatRule _parseRepeatRule(Map<String, dynamic> json) {
     switch (json['repeatRule'] as String?) {
@@ -375,10 +397,12 @@ class BirdAlarm {
         return RepeatRule.chinaWorkdays;
       case 'chinaHolidays':
         return RepeatRule.chinaHolidays;
+      case 'classSchedule':
+        return RepeatRule.classSchedule;
+      // 只在没合并的 v1.6.0 测试包里出现过的两条规则，退回工作日：每个工作日照原时间响，宁早勿漏。
       case 'earlyClass':
-        return RepeatRule.earlyClass;
       case 'noEarlyClass':
-        return RepeatRule.noEarlyClass;
+        return RepeatRule.chinaWorkdays;
       case 'weekdays':
         return RepeatRule.weekdays;
     }
@@ -403,6 +427,10 @@ class BirdAlarm {
     label: json['label'] as String? ?? '晨间鸟鸣',
     lightLeadMinutes:
         (json['lightLeadMinutes'] as int? ?? defaultLightLeadMinutes).clamp(0, 30),
+    noEarlyTime: TimeOfDay(
+      hour: json['noEarlyHour'] as int? ?? defaultNoEarlyTime.hour,
+      minute: json['noEarlyMinute'] as int? ?? defaultNoEarlyTime.minute,
+    ),
   );
 
   Map<String, dynamic> toJson() => {
@@ -414,6 +442,8 @@ class BirdAlarm {
     'enabled': enabled,
     'label': label,
     'lightLeadMinutes': lightLeadMinutes,
+    'noEarlyHour': noEarlyTime.hour,
+    'noEarlyMinute': noEarlyTime.minute,
   };
 }
 
@@ -642,10 +672,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
   }
 
   bool get _usesSchedule => _alarms.any(
-    (alarm) =>
-        alarm.enabled &&
-        (alarm.repeatRule == RepeatRule.earlyClass ||
-            alarm.repeatRule == RepeatRule.noEarlyClass),
+    (alarm) => alarm.enabled && alarm.repeatRule == RepeatRule.classSchedule,
   );
 
   // 从 Cadence 读今天起 14 天的课（它一次最多给 8 天，分两段读）。没装 Cadence、没授权时
@@ -800,10 +827,10 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     final minuteStamp = _minuteStamp(now);
     if (_lastTriggeredMinute == minuteStamp) return;
     for (final alarm in _alarms.where((alarm) => alarm.enabled)) {
-      if (alarm.time.hour != now.hour || alarm.time.minute != now.minute) {
+      final time = alarm.timeOn(now);
+      if (time == null || time.hour != now.hour || time.minute != now.minute) {
         continue;
       }
-      if (!_alarmRunsOnDate(alarm, now)) continue;
       if (Platform.isAndroid) {
         // 原生引擎才是真正的响铃执行者（选鸟 + 放音）。app 在前台/锁屏可见时，绝不能再用
         // Flutter 自己随机播一只鸟——否则会和原生那只鸟「两只鸟叠着响」，且两个关闭键各停一个。
@@ -867,9 +894,10 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     final now = DateTime.now();
     final dueNow =
         enabled.where((alarm) {
-          return alarm.time.hour == now.hour &&
-              alarm.time.minute == now.minute &&
-              _alarmRunsOnDate(alarm, now);
+          final time = alarm.timeOn(now);
+          return time != null &&
+              time.hour == now.hour &&
+              time.minute == now.minute;
         }).toList();
     final candidates = dueNow.isNotEmpty ? dueNow : enabled;
     candidates.sort((a, b) => _minutesUntil(a).compareTo(_minutesUntil(b)));
@@ -1538,9 +1566,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     }
     final saved = result.alarm;
     if (saved == null) return;
-    if (Platform.isAndroid &&
-        (saved.repeatRule == RepeatRule.earlyClass ||
-            saved.repeatRule == RepeatRule.noEarlyClass)) {
+    if (Platform.isAndroid && saved.repeatRule == RepeatRule.classSchedule) {
       // 读课表是 Cadence 定义的 dangerous 权限。弹窗关掉回到前台时，_refreshOnResume 会重读课表。
       try {
         await _systemAlarmChannel.invokeMethod<void>(
@@ -1718,7 +1744,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       2 => '后天',
       _ => '$dayDiff 天后',
     };
-    return '$dayText ${bestAlarm.time.format(context)} · ${bestAlarm.label}';
+    return '$dayText ${TimeOfDay.fromDateTime(bestAt).format(context)} · ${bestAlarm.label}';
   }
 
   int _minutesUntil(BirdAlarm alarm) {
@@ -1735,13 +1761,14 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     final base = from ?? DateTime.now();
     for (var offset = 0; offset < 366; offset++) {
       final day = base.add(Duration(days: offset));
-      if (!_alarmRunsOnDate(alarm, day)) continue;
+      final time = alarm.timeOn(day);
+      if (time == null) continue;
       final candidate = DateTime(
         day.year,
         day.month,
         day.day,
-        alarm.time.hour,
-        alarm.time.minute,
+        time.hour,
+        time.minute,
       );
       if (!candidate.isAfter(base)) continue;
       if (_skipTriggerMs != 0 &&
@@ -1789,26 +1816,12 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     return best;
   }
 
-  bool _alarmRunsOnDate(BirdAlarm alarm, DateTime date) {
-    switch (alarm.repeatRule) {
-      case RepeatRule.chinaWorkdays:
-        return ChinaWorkdayCalendar.isWorkday(date);
-      case RepeatRule.chinaHolidays:
-        // 休息日：法定节假日 + 正常放假的周末；调休补班日与普通工作日不响。
-        return !ChinaWorkdayCalendar.isWorkday(date);
-      case RepeatRule.earlyClass:
-        return scheduleDayOf(date) == ScheduleDay.earlyClass;
-      case RepeatRule.noEarlyClass:
-        return scheduleDayOf(date) == ScheduleDay.workday;
-      case RepeatRule.weekdays:
-        return alarm.repeatDays.isEmpty ||
-            alarm.repeatDays.contains(date.weekday);
-    }
-  }
 }
 
-String _hhmm(DateTime t) =>
+String _hm(TimeOfDay t) =>
     '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+String _hhmm(DateTime t) => _hm(TimeOfDay.fromDateTime(t));
 
 String _shortDateTime(DateTime t) {
   final now = DateTime.now();
@@ -2403,6 +2416,7 @@ class AlarmEditor extends StatefulWidget {
 
 class _AlarmEditorState extends State<AlarmEditor> {
   late TimeOfDay _time;
+  late TimeOfDay _noEarlyTime;
   late Set<int> _days;
   late RepeatRule _rule;
   late int _lightLead;
@@ -2416,6 +2430,7 @@ class _AlarmEditorState extends State<AlarmEditor> {
   void initState() {
     super.initState();
     _time = widget.alarm?.time ?? TimeOfDay.now();
+    _noEarlyTime = widget.alarm?.noEarlyTime ?? BirdAlarm.defaultNoEarlyTime;
     _days = {...?widget.alarm?.repeatDays};
     _rule = widget.alarm?.repeatRule ?? RepeatRule.weekdays;
     _lightLead =
@@ -2463,6 +2478,45 @@ class _AlarmEditorState extends State<AlarmEditor> {
     });
   }
 
+  Widget _timeWheel(
+    TimeOfDay value,
+    ValueChanged<TimeOfDay> onChanged, {
+    Key? key,
+  }) {
+    return CupertinoDatePicker(
+      key: key,
+      mode: CupertinoDatePickerMode.time,
+      use24hFormat: true,
+      minuteInterval: 1,
+      initialDateTime: DateTime(2026, 1, 1, value.hour, value.minute),
+      onDateTimeChanged:
+          (v) => onChanged(TimeOfDay(hour: v.hour, minute: v.minute)),
+    );
+  }
+
+  // 「课表」规则：左右两个滚轮，一个闹钟管早八和无早八两种工作日。
+  Widget _labeledWheel(
+    String label,
+    TimeOfDay value,
+    ValueChanged<TimeOfDay> onChanged,
+  ) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          Expanded(child: _timeWheel(value, onChanged, key: ValueKey(label))),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2505,24 +2559,23 @@ class _AlarmEditorState extends State<AlarmEditor> {
               // 时间直接用滚轮，少一次弹窗（iOS 闹钟就是这样）。
               SizedBox(
                 height: 172,
-                child: CupertinoDatePicker(
-                  mode: CupertinoDatePickerMode.time,
-                  use24hFormat: true,
-                  minuteInterval: 1,
-                  initialDateTime: DateTime(
-                    2026,
-                    1,
-                    1,
-                    _time.hour,
-                    _time.minute,
-                  ),
-                  onDateTimeChanged:
-                      (value) =>
-                          _time = TimeOfDay(
-                            hour: value.hour,
-                            minute: value.minute,
-                          ),
-                ),
+                child:
+                    _rule == RepeatRule.classSchedule
+                        ? Row(
+                          children: [
+                            _labeledWheel('早八', _time, (t) => _time = t),
+                            _labeledWheel(
+                              '无早八',
+                              _noEarlyTime,
+                              (t) => _noEarlyTime = t,
+                            ),
+                          ],
+                        )
+                        : _timeWheel(
+                          _time,
+                          (t) => _time = t,
+                          key: const ValueKey('single'),
+                        ),
               ),
               const SizedBox(height: 12),
               const _SectionLabel('重复'),
@@ -2530,8 +2583,7 @@ class _AlarmEditorState extends State<AlarmEditor> {
                 segments: const [
                   (value: RepeatRule.weekdays, label: '自定义'),
                   (value: RepeatRule.chinaWorkdays, label: '工作日'),
-                  (value: RepeatRule.earlyClass, label: '早八'),
-                  (value: RepeatRule.noEarlyClass, label: '无早八'),
+                  (value: RepeatRule.classSchedule, label: '课表'),
                   (value: RepeatRule.chinaHolidays, label: '节假日'),
                 ],
                 selected: _rule,
@@ -2557,10 +2609,8 @@ class _AlarmEditorState extends State<AlarmEditor> {
                 Text(
                   switch (_rule) {
                     RepeatRule.chinaWorkdays => '仅工作日响铃：周末与法定节假日不响，含调休补班日。',
-                    RepeatRule.earlyClass =>
-                      '有早八的日子响：Cadence 课表里第一节课 9 点前开始。读不到课表的工作日也按早八响。',
-                    RepeatRule.noEarlyClass =>
-                      '没有早八的工作日响（含没课的工作日）。读不到课表时不响，交给「早八」那个闹钟。',
+                    RepeatRule.classSchedule =>
+                      '有早八（第一节 9 点前）的工作日响左边，其余工作日响右边，休息日不响。读不到课表时按早八。',
                     _ => '休息日响铃：周末和法定节假日都响，调休补班日不响。',
                   },
                   style: TextStyle(
@@ -2670,6 +2720,7 @@ class _AlarmEditorState extends State<AlarmEditor> {
                   ? '鸟鸣唤醒'
                   : _labelController.text.trim(),
           lightLeadMinutes: _lightLead,
+          noEarlyTime: _noEarlyTime,
         ),
       ),
     );
@@ -5350,10 +5401,8 @@ String _repeatText(BirdAlarm alarm) {
       return '中国工作日';
     case RepeatRule.chinaHolidays:
       return '休息日';
-    case RepeatRule.earlyClass:
-      return '早八';
-    case RepeatRule.noEarlyClass:
-      return '无早八工作日';
+    case RepeatRule.classSchedule:
+      return '课表，无早八 ${_hm(alarm.noEarlyTime)}';
     case RepeatRule.weekdays:
       final days = alarm.repeatDays;
       if (days.isEmpty) return '仅一次';

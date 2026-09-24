@@ -51,7 +51,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 课表规则与 HA 光闹钟
 
-- **早八 / 无早八**（`RepeatRule.earlyClass` / `noEarlyClass`）按 `scheduleDayOf()` 判：Cadence 课表里第一节 9 点前开始 = 早八；否则工作日（`ChinaWorkdayCalendar`）= 无早八，休息日 = 节假日。**课表里没有这天（没装 Cadence、没授权、超出范围）的工作日按早八**，这是故意的：宁可 7 点响，不能让「无早八」的 8:30 睡过第一节课。别改成「不知道就当没课」。
+- **「课表」规则**（`RepeatRule.classSchedule`）是一个闹钟两个时间：早八那天响 `time`，其余工作日响 `noEarlyTime`，休息日不响。用户明确要求合成一个闹钟（分成两个闹钟列表太长），别拆回去。某天几点响统一走 `BirdAlarm.timeOn(date)`，别再按 `alarm.time` 直接比。
+- 早八按 `scheduleDayOf()` 判：Cadence 课表里第一节 9 点前开始 = 早八；否则工作日（`ChinaWorkdayCalendar`）= 无早八，休息日 = 节假日。**课表里没有这天（没装 Cadence、没授权、超出范围）的工作日按早八**，这是故意的：宁可 7 点响，不能 8:30 才响、睡过第一节课。别改成「不知道就当没课」。
 - 课表只在内存（`CadenceSchedule`），每次 `_syncSystemAlarm` 前和回到前台时经原生 `readSchedule` 重读今天起 14 天（Cadence 一次最多 8 天，分两段）。原生查询在后台线程，接口约定在 Cadence 仓库的 `docs/对外接口.md`，manifest 里的 `<queries><provider>` 和 `READ_SCHEDULE` 权限缺一不可。
 - **光闹钟联动推的是一串时刻，不是一个**：`_pushLightTimes()` 把接下来 8 次响铃各减提前量 POST 给 HA webhook（`{"linked":true,"times":[秒]}`），HA 常驻、自己挑最近一次写进灯。这样手机几天不开 App（响铃后只走原生续排）灯也照样亮。别改成只推「下一次」。
 - HA 侧（`Workspace/lab/ha-dorm`）：日出唤醒是设备里的「每天」闹钟，所以 24 小时内没有要亮的必须关掉，否则每天到点都亮；开始亮后 40 分钟内不改灯，免得打断正在亮的日出。设备的「时间」是**开始变亮**的时刻（小程序原文：日出唤醒时长结束后才响铃），所以提前量直接减。
