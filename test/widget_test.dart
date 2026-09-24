@@ -55,6 +55,13 @@ void main() {
 
     expect(find.text('深色模式'), findsOneWidget);
     expect(find.text('闹铃渐响'), findsOneWidget);
+    expect(find.text('联动 HA 光闹钟'), findsOneWidget);
+    // API Key 在光闹钟那组下面，视口外的 sliver 不构建，先滚下去。
+    await tester.drag(
+      find.byType(CustomScrollView).last,
+      const Offset(0, -300),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('xeno-canto API Key'), findsOneWidget);
   });
 
