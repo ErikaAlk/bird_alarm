@@ -23,13 +23,15 @@ Future<void> main() async {
   runApp(const BirdAlarmApp());
 }
 
-/// 全局设置（外观 / 响铃渐响 / xeno-canto API Key），存在 SharedPreferences 里，改完即存即用。
+/// 全局设置（外观 / 响铃渐响 / xeno-canto API Key / 光闹钟联动），存在 SharedPreferences 里，改完即存即用。
 /// 单独放在这里而不是塞进 `_AlarmHomePageState`：主题模式要在 `MaterialApp` 那一层生效，
 /// 比首页更靠上；响铃渐响还要同步给原生（响铃发生在原生侧，那一刻 App 可能没在跑）。
 class AppSettings extends ChangeNotifier {
   static const _themeModeKey = 'bird_alarm_theme_mode';
   static const _fadeInKey = 'bird_alarm_fade_in_seconds';
   static const _apiKeyKey = 'bird_alarm_xeno_api_key';
+  static const _lightSyncKey = 'bird_alarm_light_sync';
+  static const _lightWebhookKey = 'bird_alarm_light_webhook';
 
   /// 渐响默认开启 30 秒：突然满音量太吓人。想被立刻叫醒的，在设置页关掉即可。
   static const defaultFadeInSeconds = 30;
@@ -37,8 +39,15 @@ class AppSettings extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;
   int _fadeInSeconds = defaultFadeInSeconds;
   String _xenoApiKey = '';
+  bool _lightSyncEnabled = false;
+  String _lightWebhookUrl = '';
+  // 最近一次推给 HA 的结果，只给设置页看，不落盘。
+  String _lightSyncStatus = '';
 
   ThemeMode get themeMode => _themeMode;
+  bool get lightSyncEnabled => _lightSyncEnabled;
+  String get lightWebhookUrl => _lightWebhookUrl;
+  String get lightSyncStatus => _lightSyncStatus;
 
   /// 0 表示关闭渐响（一响就是设定音量）。
   int get fadeInSeconds => _fadeInSeconds;
@@ -50,6 +59,30 @@ class AppSettings extends ChangeNotifier {
     _themeMode = _parseThemeMode(prefs.getString(_themeModeKey));
     _fadeInSeconds = prefs.getInt(_fadeInKey) ?? defaultFadeInSeconds;
     _xenoApiKey = prefs.getString(_apiKeyKey) ?? '';
+    _lightSyncEnabled = prefs.getBool(_lightSyncKey) ?? false;
+    _lightWebhookUrl = prefs.getString(_lightWebhookKey) ?? '';
+    notifyListeners();
+  }
+
+  Future<void> setLightSyncEnabled(bool enabled) async {
+    if (enabled == _lightSyncEnabled) return;
+    _lightSyncEnabled = enabled;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_lightSyncKey, enabled);
+  }
+
+  Future<void> setLightWebhookUrl(String url) async {
+    final trimmed = url.trim();
+    if (trimmed == _lightWebhookUrl) return;
+    _lightWebhookUrl = trimmed;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lightWebhookKey, trimmed);
+  }
+
+  set lightSyncStatus(String status) {
+    _lightSyncStatus = status;
     notifyListeners();
   }
 
@@ -221,8 +254,9 @@ ThemeData buildAppTheme(Brightness brightness) {
   );
 }
 
-/// 闹钟的重复规则：自定义星期 / 中国工作日 / 中国法定节假日。
-enum RepeatRule { weekdays, chinaWorkdays, chinaHolidays }
+/// 闹钟的重复规则：自定义星期 / 中国工作日 / 中国法定节假日 /
+/// 按 Cadence 课表的早八 / 无早八工作日（见 [scheduleDayOf]）。
+enum RepeatRule { weekdays, chinaWorkdays, chinaHolidays, earlyClass, noEarlyClass }
 
 class BirdSound {
   final String id;
@@ -303,6 +337,10 @@ class BirdAlarm {
   final RepeatRule repeatRule;
   final bool enabled;
   final String label;
+  // 光闹钟比鸟鸣提前多少分钟开始亮（0~30）。只在设置里打开「联动光闹钟」时生效。
+  final int lightLeadMinutes;
+
+  static const defaultLightLeadMinutes = 10;
 
   const BirdAlarm({
     required this.id,
@@ -311,6 +349,7 @@ class BirdAlarm {
     required this.repeatRule,
     required this.enabled,
     required this.label,
+    this.lightLeadMinutes = defaultLightLeadMinutes,
   });
 
   BirdAlarm copyWith({
@@ -319,6 +358,7 @@ class BirdAlarm {
     RepeatRule? repeatRule,
     bool? enabled,
     String? label,
+    int? lightLeadMinutes,
   }) => BirdAlarm(
     id: id,
     time: time ?? this.time,
@@ -326,6 +366,7 @@ class BirdAlarm {
     repeatRule: repeatRule ?? this.repeatRule,
     enabled: enabled ?? this.enabled,
     label: label ?? this.label,
+    lightLeadMinutes: lightLeadMinutes ?? this.lightLeadMinutes,
   );
 
   static RepeatRule _parseRepeatRule(Map<String, dynamic> json) {
@@ -334,6 +375,10 @@ class BirdAlarm {
         return RepeatRule.chinaWorkdays;
       case 'chinaHolidays':
         return RepeatRule.chinaHolidays;
+      case 'earlyClass':
+        return RepeatRule.earlyClass;
+      case 'noEarlyClass':
+        return RepeatRule.noEarlyClass;
       case 'weekdays':
         return RepeatRule.weekdays;
     }
@@ -356,6 +401,8 @@ class BirdAlarm {
     repeatRule: _parseRepeatRule(json),
     enabled: json['enabled'] as bool? ?? true,
     label: json['label'] as String? ?? '晨间鸟鸣',
+    lightLeadMinutes:
+        (json['lightLeadMinutes'] as int? ?? defaultLightLeadMinutes).clamp(0, 30),
   );
 
   Map<String, dynamic> toJson() => {
@@ -366,6 +413,7 @@ class BirdAlarm {
     'repeatRule': repeatRule.name,
     'enabled': enabled,
     'label': label,
+    'lightLeadMinutes': lightLeadMinutes,
   };
 }
 
@@ -559,6 +607,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     _lifecycleState = state;
     if (state == AppLifecycleState.resumed) {
       _handleAlarmLaunch();
+      _refreshOnResume();
     } else if ((state == AppLifecycleState.paused ||
             state == AppLifecycleState.hidden) &&
         _activeAlarm == null) {
@@ -579,6 +628,100 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     _speciesSearchController.dispose();
     _player.dispose();
     super.dispose();
+  }
+
+  // 回到前台：课表可能在 Cadence 里改过（也可能刚授了读课表权限），变了就重排；
+  // 没变也补推一次光闹钟（上次可能不在宿舍 Wi-Fi、没推出去）。
+  Future<void> _refreshOnResume() async {
+    if (!_loaded || _activeAlarm != null) return;
+    if (await _refreshSchedule()) {
+      await _syncSystemAlarm();
+    } else {
+      await _pushLightTimes();
+    }
+  }
+
+  bool get _usesSchedule => _alarms.any(
+    (alarm) =>
+        alarm.enabled &&
+        (alarm.repeatRule == RepeatRule.earlyClass ||
+            alarm.repeatRule == RepeatRule.noEarlyClass),
+  );
+
+  // 从 Cadence 读今天起 14 天的课（它一次最多给 8 天，分两段读）。没装 Cadence、没授权时
+  // 原生返回 null，这段就当「不知道」，按 [scheduleDayOf] 的兜底规则走。课表有变化返回 true。
+  Future<bool> _refreshSchedule() async {
+    if (!Platform.isAndroid || !_usesSchedule) return false;
+    final now = DateTime.now();
+    final first = DateTime(now.year, now.month, now.day);
+    List<int>? starts = [];
+    for (final offset in const [0, 7]) {
+      final from = DateTime(first.year, first.month, first.day + offset);
+      final to = DateTime(first.year, first.month, first.day + offset + 7);
+      try {
+        final part = await _systemAlarmChannel.invokeMethod<List<dynamic>>(
+          'readSchedule',
+          {
+            'from': from.millisecondsSinceEpoch,
+            'to': to.millisecondsSinceEpoch,
+          },
+        );
+        if (part == null) {
+          starts = null;
+          break;
+        }
+        starts!.addAll(part.map((ms) => (ms as num).toInt()));
+      } catch (_) {
+        starts = null;
+        break;
+      }
+    }
+    final changed = CadenceSchedule.update(first, 14, starts);
+    if (changed && mounted) setState(() {});
+    return changed;
+  }
+
+  // 把接下来几次响铃对应的「光闹钟开始亮」时刻推给 HA（webhook）。HA 一直在线，由它挑最近
+  // 的一次写进灯里，所以手机只要推过一次，之后几天不开 App、不在宿舍也照样亮。
+  // 关掉联动时推 linked=false，HA 就不再按这边改灯。内容没变就不重复推。
+  String? _lastLightPush;
+
+  Future<void> _pushLightTimes() async {
+    final url = Uri.tryParse(appSettings.lightWebhookUrl);
+    if (url == null || !url.hasScheme || url.host.isEmpty) {
+      if (appSettings.lightSyncEnabled) {
+        appSettings.lightSyncStatus = '还没填 HA 的 webhook 地址';
+      }
+      return;
+    }
+    final linked = appSettings.lightSyncEnabled;
+    final times =
+        linked ? lightStartTimes(_upcomingOccurrences()) : const <DateTime>[];
+    final body = jsonEncode({
+      'linked': linked,
+      'times': [for (final t in times) t.millisecondsSinceEpoch ~/ 1000],
+    });
+    if (body == _lastLightPush) return;
+    final hhmm = _hhmm(DateTime.now());
+    try {
+      final resp = await http
+          .post(url, headers: {'Content-Type': 'application/json'}, body: body)
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode != 200) {
+        appSettings.lightSyncStatus = '$hhmm 推送失败：HA 返回 ${resp.statusCode}';
+        return;
+      }
+      _lastLightPush = body;
+      final upcoming = times.where((t) => t.isAfter(DateTime.now()));
+      appSettings.lightSyncStatus =
+          !linked
+              ? '$hhmm 已通知 HA 停止联动'
+              : upcoming.isEmpty
+              ? '$hhmm 已推送，接下来没有要亮灯的闹钟'
+              : '$hhmm 已推送，下次亮灯 ${_shortDateTime(upcoming.first)}';
+    } catch (_) {
+      appSettings.lightSyncStatus = '$hhmm 推送失败：连不上 HA。回到宿舍 Wi-Fi 后打开 App 会自动重试';
+    }
   }
 
   Future<void> _load() async {
@@ -872,6 +1015,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 
   Future<void> _syncSystemAlarm() async {
     if (!Platform.isAndroid && !Platform.isIOS) return;
+    await _refreshSchedule();
     // 先取原生记录的「被倒计时通知跳过的那一次触发时刻」，下面排程时跳过它（避免关了又被排回来）。
     if (Platform.isAndroid) {
       try {
@@ -909,6 +1053,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     } catch (_) {
       // The foreground timer still works if the platform channel is unavailable.
     }
+    await _pushLightTimes();
   }
 
   // 原生响铃可离线播放的音库：内置 asset 用完整 flutter_assets 路径，下载/本地文件用绝对路径。
@@ -1393,6 +1538,16 @@ class _AlarmHomePageState extends State<AlarmHomePage>
     }
     final saved = result.alarm;
     if (saved == null) return;
+    if (Platform.isAndroid &&
+        (saved.repeatRule == RepeatRule.earlyClass ||
+            saved.repeatRule == RepeatRule.noEarlyClass)) {
+      // 读课表是 Cadence 定义的 dangerous 权限。弹窗关掉回到前台时，_refreshOnResume 会重读课表。
+      try {
+        await _systemAlarmChannel.invokeMethod<void>(
+          'requestSchedulePermission',
+        );
+      } catch (_) {}
+    }
     setState(() {
       if (existing == null) {
         _alarms = [..._alarms, saved];
@@ -1492,6 +1647,7 @@ class _AlarmHomePageState extends State<AlarmHomePage>
                       },
                       onTestAlarm: _testSystemAlarm,
                       onCheckPermissions: _showPermissionCheck,
+                      onLightSyncChanged: _pushLightTimes,
                     ),
                   ),
                   const _KeepAlivePage(child: _AboutPage()),
@@ -1599,26 +1755,36 @@ class _AlarmHomePageState extends State<AlarmHomePage>
 
   // 接下来若干次（全局、跨所有启用闹钟）的发生时刻，升序的毫秒值。下发给原生，供「响铃后/关闭后
   // 续排下一次」；取一小串即可覆盖相近的多个闹钟，Flutter 每次同步都会刷新整张表。
-  List<int> _upcomingTriggers({int count = 8}) {
-    final result = <int>[];
+  List<int> _upcomingTriggers() => [
+    for (final (at, _) in _upcomingOccurrences()) at.millisecondsSinceEpoch,
+  ];
+
+  // 同上，但带着是哪个闹钟（光闹钟要按各自的提前量算）。
+  List<(DateTime, BirdAlarm)> _upcomingOccurrences({int count = 8}) {
+    final result = <(DateTime, BirdAlarm)>[];
     DateTime? cursor;
     for (var i = 0; i < count; i++) {
-      final next = _nextEnabledAlarmDateTime(after: cursor);
+      final next = _nextEnabledOccurrence(after: cursor);
       if (next == null) break;
-      result.add(next.millisecondsSinceEpoch);
-      cursor = next;
+      result.add(next);
+      cursor = next.$1;
     }
     return result;
   }
 
   // 最近的一次启用闹钟发生时刻。传 after 则求「严格晚于 after」的那一次。
-  DateTime? _nextEnabledAlarmDateTime({DateTime? after}) {
+  DateTime? _nextEnabledAlarmDateTime({DateTime? after}) =>
+      _nextEnabledOccurrence(after: after)?.$1;
+
+  (DateTime, BirdAlarm)? _nextEnabledOccurrence({DateTime? after}) {
     final from = after ?? DateTime.now();
-    DateTime? best;
+    (DateTime, BirdAlarm)? best;
     for (final alarm in _alarms.where((alarm) => alarm.enabled)) {
       final candidate = _nextOccurrence(alarm, from: from);
       if (candidate == null) continue;
-      if (best == null || candidate.isBefore(best)) best = candidate;
+      if (best == null || candidate.isBefore(best.$1)) {
+        best = (candidate, alarm);
+      }
     }
     return best;
   }
@@ -1630,12 +1796,42 @@ class _AlarmHomePageState extends State<AlarmHomePage>
       case RepeatRule.chinaHolidays:
         // 休息日：法定节假日 + 正常放假的周末；调休补班日与普通工作日不响。
         return !ChinaWorkdayCalendar.isWorkday(date);
+      case RepeatRule.earlyClass:
+        return scheduleDayOf(date) == ScheduleDay.earlyClass;
+      case RepeatRule.noEarlyClass:
+        return scheduleDayOf(date) == ScheduleDay.workday;
       case RepeatRule.weekdays:
         return alarm.repeatDays.isEmpty ||
             alarm.repeatDays.contains(date.weekday);
     }
   }
 }
+
+String _hhmm(DateTime t) =>
+    '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+String _shortDateTime(DateTime t) {
+  final now = DateTime.now();
+  final days =
+      DateTime(
+        t.year,
+        t.month,
+        t.day,
+      ).difference(DateTime(now.year, now.month, now.day)).inDays;
+  final day = switch (days) {
+    0 => '今天',
+    1 => '明天',
+    2 => '后天',
+    _ => '${t.month}/${t.day}',
+  };
+  return '$day ${_hhmm(t)}';
+}
+
+/// 每次响铃对应的光闹钟开始亮的时刻：响铃时间减去该闹钟的提前量，去重、升序。
+List<DateTime> lightStartTimes(List<(DateTime, BirdAlarm)> occurrences) => {
+  for (final (at, alarm) in occurrences)
+    at.subtract(Duration(minutes: alarm.lightLeadMinutes)),
+}.toList()..sort();
 
 class _AlarmTab extends StatelessWidget {
   final ValueListenable<DateTime> clock;
@@ -2209,6 +2405,7 @@ class _AlarmEditorState extends State<AlarmEditor> {
   late TimeOfDay _time;
   late Set<int> _days;
   late RepeatRule _rule;
+  late int _lightLead;
   late TextEditingController _labelController;
   // 星期格的双击判定：记住上一下点了哪天、什么时候点的、以及点之前的选择。
   DateTime? _lastDayTapAt;
@@ -2221,6 +2418,8 @@ class _AlarmEditorState extends State<AlarmEditor> {
     _time = widget.alarm?.time ?? TimeOfDay.now();
     _days = {...?widget.alarm?.repeatDays};
     _rule = widget.alarm?.repeatRule ?? RepeatRule.weekdays;
+    _lightLead =
+        widget.alarm?.lightLeadMinutes ?? BirdAlarm.defaultLightLeadMinutes;
     _labelController = TextEditingController(
       text: widget.alarm?.label ?? '鸟鸣唤醒',
     );
@@ -2331,6 +2530,8 @@ class _AlarmEditorState extends State<AlarmEditor> {
                 segments: const [
                   (value: RepeatRule.weekdays, label: '自定义'),
                   (value: RepeatRule.chinaWorkdays, label: '工作日'),
+                  (value: RepeatRule.earlyClass, label: '早八'),
+                  (value: RepeatRule.noEarlyClass, label: '无早八'),
                   (value: RepeatRule.chinaHolidays, label: '节假日'),
                 ],
                 selected: _rule,
@@ -2354,14 +2555,60 @@ class _AlarmEditorState extends State<AlarmEditor> {
                 ),
               ] else
                 Text(
-                  _rule == RepeatRule.chinaWorkdays
-                      ? '仅工作日响铃：周末与法定节假日不响，含调休补班日。'
-                      : '休息日响铃：周末和法定节假日都响，调休补班日不响。',
+                  switch (_rule) {
+                    RepeatRule.chinaWorkdays => '仅工作日响铃：周末与法定节假日不响，含调休补班日。',
+                    RepeatRule.earlyClass =>
+                      '有早八的日子响：Cadence 课表里第一节课 9 点前开始。读不到课表的工作日也按早八响。',
+                    RepeatRule.noEarlyClass =>
+                      '没有早八的工作日响（含没课的工作日）。读不到课表时不响，交给「早八」那个闹钟。',
+                    _ => '休息日响铃：周末和法定节假日都响，调休补班日不响。',
+                  },
                   style: TextStyle(
                     fontSize: 12,
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
+              if (appSettings.lightSyncEnabled) ...[
+                const SizedBox(height: 18),
+                const _SectionLabel('光闹钟'),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '提前亮起',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '$_lightLead 分钟',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+                Slider(
+                  value: _lightLead.toDouble(),
+                  max: 30,
+                  divisions: 30,
+                  label: '$_lightLead 分钟',
+                  onChanged:
+                      (value) => setState(() => _lightLead = value.round()),
+                ),
+                Text(
+                  _lightLead == 0
+                      ? '灯和鸟鸣同时开始变亮。'
+                      : '鸟鸣响之前 $_lightLead 分钟，宿舍的日出唤醒灯开始慢慢变亮。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
               const SizedBox(height: 18),
               const _SectionLabel('标签'),
               TextField(
@@ -2422,6 +2669,7 @@ class _AlarmEditorState extends State<AlarmEditor> {
               _labelController.text.trim().isEmpty
                   ? '鸟鸣唤醒'
                   : _labelController.text.trim(),
+          lightLeadMinutes: _lightLead,
         ),
       ),
     );
@@ -4017,7 +4265,7 @@ class _AboutPage extends StatelessWidget {
   const _AboutPage();
 
   // 关于页展示的版本号。发版时与 pubspec.yaml 的 version 同步更新，设置页页脚也用它。
-  static const appVersion = 'v1.5.1';
+  static const appVersion = 'v1.6.0';
 
   @override
   Widget build(BuildContext context) {
@@ -4452,11 +4700,14 @@ class _SettingsTab extends StatefulWidget {
   final ValueChanged<int> onFadeInChanged;
   final VoidCallback onTestAlarm;
   final VoidCallback onCheckPermissions;
+  // 光闹钟开关或 webhook 地址改了之后调用：立刻推一次给 HA。
+  final VoidCallback onLightSyncChanged;
 
   const _SettingsTab({
     required this.onFadeInChanged,
     required this.onTestAlarm,
     required this.onCheckPermissions,
+    required this.onLightSyncChanged,
   });
 
   @override
@@ -4465,6 +4716,7 @@ class _SettingsTab extends StatefulWidget {
 
 class _SettingsTabState extends State<_SettingsTab> {
   late final TextEditingController _apiKeyController;
+  late final TextEditingController _webhookController;
   // 关掉渐响时记住上次的时长，重新打开还是它，不用再选一遍。
   int _lastFadeInSeconds = AppSettings.defaultFadeInSeconds;
   bool _obscureApiKey = true;
@@ -4473,6 +4725,9 @@ class _SettingsTabState extends State<_SettingsTab> {
   void initState() {
     super.initState();
     _apiKeyController = TextEditingController(text: appSettings.xenoApiKey);
+    _webhookController = TextEditingController(
+      text: appSettings.lightWebhookUrl,
+    );
     if (appSettings.fadeInSeconds > 0) {
       _lastFadeInSeconds = appSettings.fadeInSeconds;
     }
@@ -4481,7 +4736,21 @@ class _SettingsTabState extends State<_SettingsTab> {
   @override
   void dispose() {
     _apiKeyController.dispose();
+    _webhookController.dispose();
     super.dispose();
+  }
+
+  Future<void> _setLightSync(bool enabled) async {
+    await appSettings.setLightSyncEnabled(enabled);
+    if (mounted) setState(() {});
+    widget.onLightSyncChanged();
+  }
+
+  Future<void> _saveWebhook() async {
+    await appSettings.setLightWebhookUrl(_webhookController.text);
+    if (!mounted) return;
+    FocusScope.of(context).unfocus();
+    widget.onLightSyncChanged();
   }
 
   Future<void> _saveApiKey() async {
@@ -4592,6 +4861,71 @@ class _SettingsTabState extends State<_SettingsTab> {
                         _lastFadeInSeconds = seconds;
                         widget.onFadeInChanged(seconds);
                       },
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 22),
+        const _SectionLabel('光闹钟'),
+        _GroupedCard(
+          children: [
+            _SettingsRow(
+              icon: Icons.wb_twilight,
+              title: '联动 HA 光闹钟',
+              subtitle: '打开后可以在每个闹钟里设置光闹钟提前亮起的时间',
+              trailing: Switch(
+                value: appSettings.lightSyncEnabled,
+                onChanged: _setLightSync,
+              ),
+            ),
+            if (appSettings.lightSyncEnabled)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'HA webhook 地址',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: _saveWebhook,
+                          child: const Text('保存'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _webhookController,
+                      keyboardType: TextInputType.url,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        hintText: 'http://192.168.0.204/api/webhook/…',
+                      ),
+                      onSubmitted: (_) => _saveWebhook(),
+                    ),
+                    const SizedBox(height: 8),
+                    ListenableBuilder(
+                      listenable: appSettings,
+                      builder:
+                          (context, _) => Text(
+                            appSettings.lightSyncStatus.isEmpty
+                                ? '每次排闹钟都会把接下来几次的亮灯时间推给 HA，由 HA 写进灯里。只在宿舍局域网里推得出去。'
+                                : appSettings.lightSyncStatus,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
                     ),
                   ],
                 ),
@@ -5016,6 +5350,10 @@ String _repeatText(BirdAlarm alarm) {
       return '中国工作日';
     case RepeatRule.chinaHolidays:
       return '休息日';
+    case RepeatRule.earlyClass:
+      return '早八';
+    case RepeatRule.noEarlyClass:
+      return '无早八工作日';
     case RepeatRule.weekdays:
       final days = alarm.repeatDays;
       if (days.isEmpty) return '仅一次';
@@ -5035,6 +5373,59 @@ String? _mimeFor(String path) {
   if (lower.endsWith('.wav')) return 'audio/wav';
   if (lower.endsWith('.ogg')) return 'audio/ogg';
   return null;
+}
+
+/// 课表同步的三种日子。
+enum ScheduleDay { earlyClass, workday, holiday }
+
+/// 早八（第一节课 9 点前开始，兰大第一节 8:30）/ 无早八的工作日 / 节假日。
+/// 工作日按 [ChinaWorkdayCalendar]（含调休）；课表来自 Cadence，放假调休它已经按校历算过。
+/// 课表里没有这天的数据（没装 Cadence、没授权、超出读取范围）时，工作日一律按早八算：
+/// 宁可早响，也不能让「无早八」的闹钟睡过第一节课。
+ScheduleDay scheduleDayOf(DateTime date) {
+  final first = CadenceSchedule.firstClassMinute(date);
+  if (first != null && first >= 0 && first < 9 * 60) {
+    return ScheduleDay.earlyClass;
+  }
+  final workday = ChinaWorkdayCalendar.isWorkday(date);
+  if (!workday) return ScheduleDay.holiday;
+  return first == null ? ScheduleDay.earlyClass : ScheduleDay.workday;
+}
+
+/// 从 Cadence 读来的课表，只留每天第一节课的开始时刻。只在内存里，每次排闹钟前重读。
+class CadenceSchedule {
+  // 日期 → 第一节课开始的分钟数（0 点起算），-1 = 那天没课；不在表里 = 不知道。
+  static final Map<String, int> _firstClass = {};
+
+  static int? firstClassMinute(DateTime date) =>
+      _firstClass[ChinaWorkdayCalendar._dateKey(date)];
+
+  /// 用 [firstDay] 起 [days] 天里所有课的开始时刻（毫秒）整体替换缓存；[starts] 为 null
+  /// 表示读不到，这些天都当「不知道」。有变化返回 true。
+  static bool update(DateTime firstDay, int days, List<int>? starts) {
+    final next = <String, int>{};
+    if (starts != null) {
+      for (var i = 0; i < days; i++) {
+        next[ChinaWorkdayCalendar._dateKey(
+              DateTime(firstDay.year, firstDay.month, firstDay.day + i),
+            )] =
+            -1;
+      }
+      for (final ms in starts) {
+        final t = DateTime.fromMillisecondsSinceEpoch(ms);
+        final key = ChinaWorkdayCalendar._dateKey(t);
+        final current = next[key];
+        if (current == null) continue;
+        final minute = t.hour * 60 + t.minute;
+        if (current < 0 || minute < current) next[key] = minute;
+      }
+    }
+    final changed = !mapEquals(next, _firstClass);
+    _firstClass
+      ..clear()
+      ..addAll(next);
+    return changed;
+  }
 }
 
 /// 中国节假日数据：在线实时获取（timor.tech），带本地缓存；离线/失败时回退到
