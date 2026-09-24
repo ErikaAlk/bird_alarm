@@ -14,6 +14,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- 读 Cadence 课表（早八 / 无早八规则用）。Cadence 定义的 dangerous 权限，装了 Cadence 才有意义。 -->
+    <uses-permission android:name="click.erikaalk.cadence.permission.READ_SCHEDULE"/>
     <application
         android:label="鸟瘾闹钟"
         android:name="${applicationName}"
@@ -65,6 +67,8 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- Android 11 起看不见别的应用的 provider，要在这里点名 Cadence 的课表接口。 -->
+        <provider android:authorities="click.erikaalk.cadence.schedule" />
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Flutter 在 `C:\dev\flutter\bin`（**不一定在 PATH 上**；脚本里用全路径或 `$env:Path += ";C:\dev\flutter\bin"`）。Dart 3.12 / Flutter 3.44。
 - `flutter analyze`，**Dart 改动的主要自验手段**（不需要 Gradle，秒级返回；改完 Dart 必跑）。
-- `flutter test`，`test/widget_test.dart`（首页渲染冒烟 + 滑动切页 + 星期格尺寸/双击 + 设置页）、`test/daily_birds_test.dart`（每日一鸟挑选规则）与 `test/countdown_text_test.dart`（还有多久响铃的文案）。
+- `flutter test`，`test/widget_test.dart`（首页渲染冒烟 + 滑动切页 + 星期格尺寸/双击 + 设置页）、`test/daily_birds_test.dart`（每日一鸟挑选规则）、`test/countdown_text_test.dart`（还有多久响铃的文案）与 `test/schedule_day_test.dart`（早八 / 无早八 / 节假日的判定和光闹钟时刻）。
 - **想「看一眼」UI 改动**：临时写个 golden 测试把页面渲染成 PNG（`expectLater(find.byType(BirdAlarmApp), matchesGoldenFile('preview/x.png'))` + `flutter test --update-goldens`），再直接看图；比装机快得多，配色/间距/深色适配一看便知。注意测试字体没有中文，**汉字会显示成方块**，只能判断布局与配色，看完把临时文件删掉别提交。
 - `flutter build apk --release --split-per-abi`，**默认构建方式**（含 Kotlin 的完整构建，能验证原生改动）。**一律用 release，不再用 debug**；按架构拆分，产物 `build\app\outputs\flutter-apk\app-<abi>-release.apk`（arm64-v8a / armeabi-v7a / x86_64）。装机/发版都以此为准。
 - `.\install.ps1`，构建 release 拆分包 + adb 覆盖安装 + 启动，**默认装 arm64-v8a**。参数 `-Abi armeabi-v7a|x86_64`（换架构）/ `-NoBuild`（用已有包）/ `-NoLaunch`。pwsh 7 下直接在终端跑即可（`LocalMachine` 执行策略 `RemoteSigned`，本地脚本放行，不再需要旧的 `install.bat` 绕执行策略包装器）。
@@ -48,6 +48,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `targetSdk` 保持 **36**（Live Updates 需要）。`prepareAlarmWindow` 只设 `setShowWhenLocked`/`setTurnScreenOn`，**不要 `requestDismissKeyguard`**（用户要无需解锁就能关/贪睡）。
 - **省电 vs 屏幕常亮（动响铃 UI 前必读）**：`prepareAlarmWindow` 还会加 `FLAG_KEEP_SCREEN_ON`，它**一旦设上、配合 `showWhenLocked`，会让本应用整夜强制亮屏**（实测整夜掉电 ~50% 的元凶之一）。所以响铃**结束**（关闭/贪睡/通知关闭）后必须调 `releaseAlarmWindow` 清掉它。`releaseAlarmWindow` **只 `clearFlags(FLAG_KEEP_SCREEN_ON | FLAG_ALLOW_LOCK_WHILE_SCREEN_ON)`，绝不动 `setShowWhenLocked`/`setTurnScreenOn`**（动了下一次锁屏全屏响铃会被 BAL 拦掉）；并在原生侧用 `getRingingAsset()!=null` 做「仍在响就不释放」的防抢守卫。Flutter 在三条收尾路径（`_dismissAlarm`/`_snoozeAlarm`/`_dismissOverlayIfNativeStopped`）+ 退后台(`paused`/`hidden`)时调它。
 - **每秒计时器要分生命周期**：`_ticker` 每秒只更新 `_clock`（`ValueNotifier`，经 `ValueListenableBuilder` 局部重建报时卡片的时间文字）+ 轮询原生（`_checkAlarms`/`_dismissOverlayIfNativeStopped`），**不做整页 `setState`**；它只在 `_activeAlarm!=null` 或 `resumed` 时跑（`_reconcileTicker`），退后台熄屏(`paused`/`hidden`)就停。**绝不在 `inactive` 停**，锁屏遮挡下的前台(showWhenLocked)上报 `inactive`，那时遮罩可能正显示、要继续轮询自动关。原生可能在 `paused` 时拉起响铃，所以 `_ring` 里置 `_activeAlarm` 后要立刻 `_reconcileTicker()` 把计时器拉回来。
+
+## 课表规则与 HA 光闹钟
+
+- **「课表」规则**（`RepeatRule.classSchedule`）是一个闹钟两个时间：早八那天响 `time`，其余工作日响 `noEarlyTime`，休息日不响。用户明确要求合成一个闹钟（分成两个闹钟列表太长），别拆回去。某天几点响统一走 `BirdAlarm.timeOn(date)`，别再按 `alarm.time` 直接比。
+- 早八按 `scheduleDayOf()` 判：Cadence 课表里第一节 9 点前开始 = 早八；否则工作日（`ChinaWorkdayCalendar`）= 无早八，休息日 = 节假日。**课表里没有这天（没装 Cadence、没授权、超出范围）的工作日按早八**，这是故意的：宁可 7 点响，不能 8:30 才响、睡过第一节课。别改成「不知道就当没课」。
+- 课表只在内存（`CadenceSchedule`），每次 `_syncSystemAlarm` 前和回到前台时经原生 `readSchedule` 重读今天起 14 天（Cadence 一次最多 8 天，分两段）。原生查询在后台线程，接口约定在 Cadence 仓库的 `docs/对外接口.md`，manifest 里的 `<queries><provider>` 和 `READ_SCHEDULE` 权限缺一不可。
+- **光闹钟联动推的是一串时刻，不是一个**：`_pushLightTimes()` 把接下来 8 次响铃各减提前量 POST 给 HA webhook（`{"linked":true,"times":[秒]}`），HA 常驻、自己挑最近一次写进灯。这样手机几天不开 App（响铃后只走原生续排）灯也照样亮。别改成只推「下一次」。
+- HA 侧（`Workspace/lab/ha-dorm`）：日出唤醒是设备里的「每天」闹钟，所以 24 小时内没有要亮的必须关掉，否则每天到点都亮；开始亮后 40 分钟内不改灯，免得打断正在亮的日出。设备的「时间」是**开始变亮**的时刻（小程序原文：日出唤醒时长结束后才响铃），所以提前量直接减。
 
 ## 其他容易踩的点
 

@@ -114,6 +114,31 @@ class MainActivity : FlutterActivity() {
                     openPermissionSetting(call.argument<String>("type") ?: "")
                     result.success(null)
                 }
+                "readSchedule" -> {
+                    // 读 Cadence 的课表。provider 可能要先把 Cadence 进程拉起来，放后台线程，
+                    // 回主线程交结果（和 transcodeAudio 一样守着 engineDestroyed）。
+                    val from = call.argument<Number>("from")?.toLong() ?: 0L
+                    val to = call.argument<Number>("to")?.toLong() ?: 0L
+                    Thread {
+                        val starts = readCadenceClassStarts(from, to)
+                        mainHandler.post {
+                            if (!engineDestroyed) {
+                                try {
+                                    result.success(starts)
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                    }.start()
+                }
+                "requestSchedulePermission" -> {
+                    if (checkSelfPermission(CADENCE_READ_PERMISSION) !=
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        requestPermissions(arrayOf(CADENCE_READ_PERMISSION), 2002)
+                    }
+                    result.success(null)
+                }
                 "stopAlarmSound" -> {
                     stopAlarmSound()
                     result.success(null)
@@ -568,6 +593,23 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // [from, to) 里每节课的开始时刻（毫秒）。没装 Cadence、没授权、查询出错一律返回 null，
+    // Flutter 那边当「不知道」处理。接口约定见 Cadence 仓库的 docs/对外接口.md。
+    private fun readCadenceClassStarts(from: Long, to: Long): List<Long>? {
+        if (checkSelfPermission(CADENCE_READ_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            return null
+        }
+        val uri = Uri.parse("content://click.erikaalk.cadence.schedule/classes?from=$from&to=$to")
+        return try {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val column = cursor.getColumnIndexOrThrow("start_ms")
+                buildList { while (cursor.moveToNext()) add(cursor.getLong(column)) }
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun appDetailsIntent(packageUri: Uri): Intent =
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
 
@@ -777,5 +819,6 @@ class MainActivity : FlutterActivity() {
         const val GUARD_NOTIFICATION_ID = 1011
         const val GUARD_CHANNEL_ID = "bird_alarm_guard"
         const val GUARD_CONTENT_REQUEST_CODE = 1012
+        const val CADENCE_READ_PERMISSION = "click.erikaalk.cadence.permission.READ_SCHEDULE"
     }
 }
