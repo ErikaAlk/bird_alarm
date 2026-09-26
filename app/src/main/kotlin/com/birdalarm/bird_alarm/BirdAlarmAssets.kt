@@ -36,7 +36,7 @@ object BirdAlarmAssets {
     fun cnNameFor(context: Context, assetPath: String?): String {
         if (assetPath.isNullOrEmpty()) return "鸟鸣"
         try {
-            val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString("sound_names", null)
+            val raw = nativePrefs(context).getString("sound_names", null)
             if (!raw.isNullOrEmpty()) {
                 val name = org.json.JSONObject(raw).optString(assetPath)
                 if (name.isNotEmpty()) return name

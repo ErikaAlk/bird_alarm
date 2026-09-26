@@ -32,7 +32,7 @@ class AlarmReceiver : BroadcastReceiver() {
             cancel(MainActivity.GUARD_NOTIFICATION_ID)
         }
 
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = nativePrefs(context)
         val now = System.currentTimeMillis()
         val lastTrigger = prefs.getLong("last_trigger_at", 0L)
         if (now - lastTrigger < 30_000) return
@@ -188,7 +188,7 @@ class AlarmReceiver : BroadcastReceiver() {
             notificationManager.cancel(COUNTDOWN_NOTIFICATION_ID)
             notificationManager.cancel(AlarmSoundService.NOTIFICATION_ID)
             notificationManager.cancel(MainActivity.GUARD_NOTIFICATION_ID)
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            nativePrefs(context)
                 .edit()
                 .putBoolean("launch_alarm", false)
                 .putLong("skip_trigger_at", skipTriggerAt)

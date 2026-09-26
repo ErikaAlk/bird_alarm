@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
  * 这里监听它的变化交给 Store；另外负责响铃时点亮屏幕、响完释放「屏幕常亮」。
  */
 class MainActivity : ComponentActivity() {
-    private val nativePrefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
+    private val enginePrefs by lazy { nativePrefs(this) }
 
     // 同一进程里 AlarmReceiver / AlarmSoundService 写 prefs 会回调到这里（主线程）。
     // SharedPreferences 只弱引用监听器，所以放在字段里
@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         Store.init(this)
-        nativePrefs.registerOnSharedPreferenceChangeListener(ringingListener)
+        enginePrefs.registerOnSharedPreferenceChangeListener(ringingListener)
         Store.onRinging(AlarmControl.ringingAsset(this))
         AlarmControl.clearPendingLaunch(this)
         if (launchedByAlarm && Store.ringingAsset != null) prepareAlarmWindow()
@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        nativePrefs.unregisterOnSharedPreferenceChangeListener(ringingListener)
+        enginePrefs.unregisterOnSharedPreferenceChangeListener(ringingListener)
         super.onDestroy()
     }
 

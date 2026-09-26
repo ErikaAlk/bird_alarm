@@ -64,7 +64,7 @@ class AlarmSoundService : Service() {
     private fun ring() {
         armedRunnable?.let { handler.removeCallbacks(it) }
         armedRunnable = null
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = nativePrefs(this)
         val now = System.currentTimeMillis()
         val lastTrigger = prefs.getLong("last_trigger_at", 0L)
         if (now - lastTrigger < 3_000 && NativeAlarmPlayer.isPlaying()) {
@@ -107,7 +107,7 @@ class AlarmSoundService : Service() {
         val triggerAt = System.currentTimeMillis() + SNOOZE_MINUTES * 60_000L
         // 先记下贪睡到几点，再停铃：stop() 清 ringing_asset 时界面的监听会在主线程上同步回调，
         // 它据此判断这一轮是贪睡、不重排（没有启用的闹钟时重排会把贪睡一起撤掉）
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putLong(SNOOZE_UNTIL, triggerAt).apply()
+        nativePrefs(this).edit().putLong(SNOOZE_UNTIL, triggerAt).apply()
         NativeAlarmPlayer.stop(this)
         armSnooze(this, triggerAt)
         val notificationManager =
@@ -123,7 +123,7 @@ class AlarmSoundService : Service() {
     }
 
     private fun currentBirdName(): String {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = nativePrefs(this)
         return BirdAlarmAssets.cnNameFor(this, prefs.getString("ringing_asset", null))
     }
 
