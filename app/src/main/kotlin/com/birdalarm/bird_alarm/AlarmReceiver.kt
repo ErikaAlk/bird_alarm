@@ -194,6 +194,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 .edit()
                 .putBoolean("launch_alarm", false)
                 .putLong("skip_trigger_at", skipTriggerAt)
+                .remove(AlarmSoundService.SNOOZE_UNTIL)
                 .apply()
             // 关掉「即将响的这次(skipTriggerAt)」后，从时刻表里排掉它（及更早的），把剩下最早的那次完整排上
             // （精确闹钟 + 响铃前倒计时 + 已守护通知）。这样关掉贪睡/倒计时后，下一次照常响、无需打开 App，

@@ -110,8 +110,6 @@ object Store {
     private var initialized = false
     private var lastFadeIn = 30
     private var lastLightPush: String? = null
-    // 响铃页上点了「贪睡」：原生刚排好贪睡，这一轮结束后别重排（没有启用的闹钟时重排会把贪睡一起取消）
-    private var snoozedFromOverlay = false
     private var preview: MediaPlayer? = null
 
     fun init(context: Context) {
@@ -309,15 +307,13 @@ object Store {
             return
         }
         if (!wasRinging) return
-        if (snoozedFromOverlay) snoozedFromOverlay = false else sync()
+        // 贪睡的那一轮不重排：没有启用的闹钟时重排会把刚排好的贪睡一起撤掉（通知栏和响铃页上的贪睡都算）
+        if (!AlarmControl.snoozePending(app)) sync()
     }
 
     fun dismissRinging() = AlarmControl.stopSound(app)
 
-    fun snoozeRinging() {
-        snoozedFromOverlay = true
-        AlarmControl.snooze(app)
-    }
+    fun snoozeRinging() = AlarmControl.snooze(app)
 
     /** 正在叫的那只鸟：原生记的是路径，按路径对回音库；Flutter 版留下的旧路径按文件名对。 */
     fun ringingSound(asset: String): BirdSound {

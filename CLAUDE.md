@@ -36,7 +36,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `NativeAlarmPlayer.kt`：`MediaPlayer` 播放；`ensureRingingAsset()` 在响铃那一刻随机选鸟并写入 `ringing_asset`；闹铃渐响（读 `fade_in_seconds`）。
   - `BirdAlarmAssets.kt`：内置 10 种鸟鸣（`starters`，音库和原生共用这一份）。
   - `DownloadNotifier.kt`：下载进度通知（id=`1013`，Live Update）。`AudioTranscoder.kt`：下载后转 m4a 并放大 2.5 倍，**必须在后台线程调**。
-  - 引擎状态都在 prefs `bird_alarm_native`（`ringing_asset`、`launch_alarm`、`upcoming_triggers`、`sound_pool`、`sound_names`、`skip_trigger_at`、`fade_in_seconds`）。
+  - 引擎状态都在 prefs `bird_alarm_native`（`ringing_asset`、`launch_alarm`、`upcoming_triggers`、`sound_pool`、`sound_names`、`skip_trigger_at`、`snooze_until`、`fade_in_seconds`）。
 - **界面层**：
   - `Store.kt`：进程级单例，界面全部状态（Compose state）和业务：闹钟、音库、设置、下载、试听、光闹钟推送。`sync()` 把「接下来 8 次」交给引擎并推给 HA。
     App 自己的数据在 prefs `bird_alarm_app`。
@@ -58,6 +58,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **滚轮 `CoNumberPicker` 要明确给宽度**（`Modifier.width(CoTokens.Picker.minWidth)`）：库里 2026-09-26 以前的版本只靠 `widthIn(min)` 时画布实际宽 0，数字全被裁掉。
   修复在设计库 PR #14；合进 main 之前这边的规避不能删。
 - 面板里装卡片分组时，库修好后改用 `CoBottomSheet(grouped = true)`（同在 PR #14），否则亮色下白卡片放在白面板上看不出分组。
+- **闹钟卡片上的开关外面包了一层吃掉抬手**：库里的 `CoSwitch` 点按不消费事件，卡片的点击会跟着触发，一点开关就连编辑面板一起弹出，
+  而面板底部的“删除闹钟”正好在底栏的位置，连点两下就误删（2026-09-26 模拟器上真删掉过一个）。库的修复也在 PR #14，合进去之后才能去掉这层。
 
 ## 锁屏全屏响铃的关键约束（动 targetSdk 或响铃页前必读）
 
@@ -72,7 +74,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   响铃结束必须 `releaseAlarmWindow` 清掉它（`ringing_asset` 变空时自动调，退到后台时再兜一次）。**只清这两个 flag，绝不动 `setShowWhenLocked` / `setTurnScreenOn`**，
   并且原生还在响（`ringing_asset` 非空）就不释放。
 - 响铃开始时，页面（连同编辑面板、弹出菜单这些独立窗口）先拿出组合，否则会压在响铃页上面点不到。响铃中返回键不退出。
-- 响铃中 `Store.sync()` 不重排（会补发「已守护」通知，没有启用的闹钟时还会把这一轮撤掉）；一轮结束后重排，**响铃页上点贪睡的那一轮不重排**（重排会撤掉贪睡）。
+- 响铃中 `Store.sync()` 不重排（会补发「已守护」通知，没有启用的闹钟时还会把这一轮撤掉）；一轮结束后重排，**有贪睡在等的那一轮不重排**：
+  没有启用的闹钟时重排走 `cancel()`，会把刚排好的贪睡（请求码 1005）一起撤掉。贪睡由 `AlarmSoundService.snooze()` 记下 `snooze_until`，
+  通知栏和响铃页上的贪睡都算；**它必须在 `NativeAlarmPlayer.stop()` 之前写**：`stop()` 清 `ringing_asset` 时，同在主线程的监听会被同步回调。
 
 ## 课表规则与 HA 光闹钟
 

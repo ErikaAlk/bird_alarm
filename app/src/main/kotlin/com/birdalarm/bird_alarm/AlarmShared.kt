@@ -257,6 +257,10 @@ object AlarmControl {
     /** 被「倒计时通知 → 关闭闹钟」跳过的那一次（毫秒）；无则 0。重排时跳过它，免得关了又被排回来。 */
     fun skippedTrigger(context: Context): Long = prefs(context).getLong("skip_trigger_at", 0L)
 
+    /** 有贪睡在等（通知栏或响铃页上点的都算）：这一轮响完不重排，免得把贪睡撤掉。 */
+    fun snoozePending(context: Context): Boolean =
+        prefs(context).getLong(AlarmSoundService.SNOOZE_UNTIL, 0L) > System.currentTimeMillis()
+
     fun hasPendingLaunch(context: Context): Boolean = prefs(context).getBoolean("launch_alarm", false)
 
     fun clearPendingLaunch(context: Context) {

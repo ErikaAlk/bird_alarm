@@ -105,8 +105,11 @@ class AlarmSoundService : Service() {
 
     // 贪睡：停掉当前铃声与通知，N 分钟后重新触发响铃。
     private fun snooze() {
-        NativeAlarmPlayer.stop(this)
         val triggerAt = System.currentTimeMillis() + SNOOZE_MINUTES * 60_000L
+        // 先记下贪睡到几点，再停铃：stop() 清 ringing_asset 时界面的监听会在主线程上同步回调，
+        // 它据此判断这一轮是贪睡、不重排（没有启用的闹钟时重排会把贪睡一起撤掉）
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putLong(SNOOZE_UNTIL, triggerAt).apply()
+        NativeAlarmPlayer.stop(this)
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pendingIntent = alarmBroadcastPendingIntent(this, SNOOZE_REQUEST_CODE)
         try {
@@ -248,5 +251,6 @@ class AlarmSoundService : Service() {
         const val NOTIFICATION_ID = 1001
         const val SNOOZE_MINUTES = 5
         const val SNOOZE_REQUEST_CODE = 1005
+        const val SNOOZE_UNTIL = "snooze_until"
     }
 }

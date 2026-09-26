@@ -2,6 +2,9 @@ package com.birdalarm.bird_alarm.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -120,7 +124,12 @@ private fun AlarmCard(alarm: BirdAlarm, onEdit: (BirdAlarm) -> Unit) {
                 RowText(metaText(meta), maxLines = 1)
             }
             Spacer(Modifier.size(L.switchGap))
-            CoSwitch(alarm.enabled, { Store.setEnabled(alarm.id, it) })
+            // 设计库的 CoSwitch 点按时不消费抬手事件，卡片的点击会跟着触发：一点开关就连编辑面板一起打开，
+            // 而面板底部的“删除闹钟”正好在底栏位置，连点两下就误删了（2026-09-26 模拟器上复现）。
+            // 这里在开关外面把抬手吃掉；库里的修复见 coloros-ui-kit#14，合进去之后可以去掉
+            Box(Modifier.pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false); waitForUpOrCancellation()?.consume() } }) {
+                CoSwitch(alarm.enabled, { Store.setEnabled(alarm.id, it) })
+            }
         }
         // 锚点放在卡片内侧右下：锚在整张卡上时菜单会贴到屏幕边缘外
         Box(Modifier.align(Alignment.BottomEnd).padding(end = L.cardMarginH + L.paddingH)) {
