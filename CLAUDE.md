@@ -77,6 +77,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 响铃中 `Store.sync()` 不重排（会补发「已守护」通知，没有启用的闹钟时还会把这一轮撤掉）；一轮结束后重排，**有贪睡在等的那一轮不重排**：
   没有启用的闹钟时重排走 `cancel()`，会把刚排好的贪睡（请求码 1005）一起撤掉。贪睡由 `AlarmSoundService.snooze()` 记下 `snooze_until`，
   通知栏和响铃页上的贪睡都算；**它必须在 `NativeAlarmPlayer.stop()` 之前写**：`stop()` 清 `ringing_asset` 时，同在主线程的监听会被同步回调。
+  撤贪睡一律走 `cancelSnooze()`（撤 1005 + 清 `snooze_until`）：只撤闹钟不清记录，界面会以为贪睡还在、下一轮响完跳过重排（例：贪睡中另一只闹钟响了又被关掉）。
 
 ## 课表规则与 HA 光闹钟
 

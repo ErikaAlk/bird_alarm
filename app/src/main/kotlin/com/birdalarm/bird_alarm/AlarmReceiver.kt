@@ -85,10 +85,9 @@ class AlarmReceiver : BroadcastReceiver() {
 
     private fun cancelThisAlarmRound(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        // 含贪睡再排的 1005：本轮重新响起时，作废上一轮可能还挂着的贪睡。
-        listOf(1001, 1004, AlarmSoundService.SNOOZE_REQUEST_CODE).forEach { requestCode ->
-            alarmManager.cancel(alarmBroadcastPendingIntent(context, requestCode))
-        }
+        listOf(1001, 1004).forEach { alarmManager.cancel(alarmBroadcastPendingIntent(context, it)) }
+        // 本轮重新响起时，作废上一轮可能还挂着的贪睡。
+        cancelSnooze(context)
     }
 
     companion object {
@@ -176,10 +175,9 @@ class AlarmReceiver : BroadcastReceiver() {
         // skipTriggerAt = 这一次被跳过的触发时刻；记到 prefs，App 重排时跳过它，避免「关了又被排回来」。
         fun cancelUpcoming(context: Context, skipTriggerAt: Long) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            // 含贪睡再排的 1005，确保连带挂着的贪睡也一起取消。
-            listOf(1001, 1004, AlarmSoundService.SNOOZE_REQUEST_CODE).forEach { requestCode ->
-                alarmManager.cancel(alarmBroadcastPendingIntent(context, requestCode))
-            }
+            listOf(1001, 1004).forEach { alarmManager.cancel(alarmBroadcastPendingIntent(context, it)) }
+            // 连带挂着的贪睡也一起取消。
+            cancelSnooze(context)
             try {
                 context.stopService(Intent(context, AlarmSoundService::class.java))
             } catch (_: Exception) {
@@ -194,7 +192,6 @@ class AlarmReceiver : BroadcastReceiver() {
                 .edit()
                 .putBoolean("launch_alarm", false)
                 .putLong("skip_trigger_at", skipTriggerAt)
-                .remove(AlarmSoundService.SNOOZE_UNTIL)
                 .apply()
             // 关掉「即将响的这次(skipTriggerAt)」后，从时刻表里排掉它（及更早的），把剩下最早的那次完整排上
             // （精确闹钟 + 响铃前倒计时 + 已守护通知）。这样关掉贪睡/倒计时后，下一次照常响、无需打开 App，

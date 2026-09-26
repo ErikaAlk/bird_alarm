@@ -51,6 +51,14 @@ fun alarmBroadcastPendingIntent(context: Context, requestCode: Int): PendingInte
     )
 }
 
+// 撤掉贪睡(1005)一律走这里：闹钟和 snooze_until 要一起清，只撤闹钟不清记录的话，
+// 界面会以为还有贪睡在等、响铃结束时跳过重排（AlarmControl.snoozePending）。
+fun cancelSnooze(context: Context) {
+    (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
+        .cancel(alarmBroadcastPendingIntent(context, AlarmSoundService.SNOOZE_REQUEST_CODE))
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().remove(AlarmSoundService.SNOOZE_UNTIL).apply()
+}
+
 // setAlarmClock 的 show-intent：点系统状态栏「下一个闹钟」芯片时打开本应用（仅查看入口，不带 launch_alarm）。
 fun alarmShowIntent(context: Context): PendingIntent {
     val intent = Intent(context, MainActivity::class.java).apply {
@@ -215,7 +223,7 @@ object AlarmControl {
         alarmManager.cancel(alarmBroadcastPendingIntent(context, 1001))
         alarmManager.cancel(alarmBroadcastPendingIntent(context, 1004))
         // 贪睡再排的闹钟(1005)也要取消：否则贪睡后又在 App 里禁用 / 删除闹钟，5 分钟后仍会响
-        alarmManager.cancel(alarmBroadcastPendingIntent(context, AlarmSoundService.SNOOZE_REQUEST_CODE))
+        cancelSnooze(context)
         alarmManager.cancel(alarmShowIntent(context))
         alarmManager.cancel(preAlarmPendingIntent(context, 0L))
         // 闹钟被整体取消：清掉「接下来若干次」，免得续排逻辑据陈旧值误排
