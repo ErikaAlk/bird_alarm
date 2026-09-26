@@ -21,6 +21,8 @@ class RingPoolTest {
     @Test
     fun `只剩下载的且读不到时退回内置`() {
         assertEquals(BirdAlarmAssets.sounds, ringablePool(downloaded) { false })
+        // 默认按真实文件判断：不存在的路径读不到
+        assertEquals(BirdAlarmAssets.sounds, ringablePool("/no/such/dir/xc-1.m4a"))
     }
 
     @Test

@@ -30,8 +30,10 @@ fun nativePrefs(context: Context): SharedPreferences {
     val storage = app.createDeviceProtectedStorageContext()
     val prefs = storage.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     if (prefs.getBoolean(KEY_IN_DEVICE_STORAGE, false) || !app.getSystemService(UserManager::class.java).isUserUnlocked) return prefs
+    // 先等解锁前排队的 apply() 落盘，免得它晚到、把搬过来的文件盖掉。搬失败就不记标记，下次再搬
+    prefs.edit().commit()
+    if (!storage.moveSharedPreferencesFrom(app, PREFS_NAME)) return prefs
     // 搬完会作废两边的缓存，要重新取一次
-    storage.moveSharedPreferencesFrom(app, PREFS_NAME)
     return storage.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).also {
         it.edit().putBoolean(KEY_IN_DEVICE_STORAGE, true).commit()
     }
