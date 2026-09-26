@@ -17,8 +17,8 @@ android {
         targetSdk = 36
         // Flutter 版按架构拆包时 versionCode = 架构号 × 1000 + 版本号（手机上的 arm64 包是 2040，x86_64 是 4040），
         // 新版要比它们都大才能覆盖安装，所以从 5041 起，之后每发一版加一
-        versionCode = 5042
-        versionName = "2.0.1"
+        versionCode = 5043
+        versionName = "2.0.2"
     }
 
     buildTypes {
