@@ -2,9 +2,6 @@ package com.birdalarm.bird_alarm.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +15,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -37,7 +33,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -124,12 +119,7 @@ private fun AlarmCard(alarm: BirdAlarm, onEdit: (BirdAlarm) -> Unit) {
                 RowText(metaText(meta), maxLines = 1)
             }
             Spacer(Modifier.size(L.switchGap))
-            // 设计库的 CoSwitch 点按时不消费抬手事件，卡片的点击会跟着触发：一点开关就连编辑面板一起打开，
-            // 而面板底部的“删除闹钟”正好在底栏位置，连点两下就误删了（2026-09-26 模拟器上复现）。
-            // 这里在开关外面把抬手吃掉；库里的修复见 coloros-ui-kit#14，合进去之后可以去掉
-            Box(Modifier.pointerInput(Unit) { awaitEachGesture { awaitFirstDown(requireUnconsumed = false); waitForUpOrCancellation()?.consume() } }) {
-                CoSwitch(alarm.enabled, { Store.setEnabled(alarm.id, it) })
-            }
+            CoSwitch(alarm.enabled, { Store.setEnabled(alarm.id, it) })
         }
         // 锚点放在卡片内侧右下：锚在整张卡上时菜单会贴到屏幕边缘外
         Box(Modifier.align(Alignment.BottomEnd).padding(end = L.cardMarginH + L.paddingH)) {
@@ -154,7 +144,7 @@ fun AlarmEditorSheet(existing: BirdAlarm?, onDismiss: () -> Unit, onSaved: (Bird
     var lead by rememberSaveable { mutableIntStateOf(existing?.lightLeadMinutes ?: BirdAlarm.DEFAULT_LIGHT_LEAD) }
     var label by rememberSaveable { mutableStateOf(existing?.label ?: BirdAlarm.DEFAULT_LABEL) }
 
-    CoBottomSheet(onDismissRequest = onDismiss) {
+    CoBottomSheet(onDismissRequest = onDismiss, grouped = true) {
         val close = LocalCoBottomSheetClose.current
         CoPanelTitleBar(
             if (existing == null) "新建闹钟" else "编辑闹钟",
@@ -237,12 +227,10 @@ private fun ruleDetail(rule: RepeatRule, days: Set<Int>): String = when (rule) {
 private fun TimeWheel(title: String?, hour: Int, minute: Int, onHour: (Int) -> Unit, onMinute: (Int) -> Unit, modifier: Modifier) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         title?.let { CoText(it, style = CoTokens.Type.bodyS, color = CoTokens.Color.label2.current) }
-        // 宽度要明确给：滚轮是 Canvas，只靠组件自带的 widthIn(min) 时实际绘制宽度是 0，数字全被裁掉（设计库的 bug）
-        val wheel = Modifier.width(CoTokens.Picker.minWidth)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            CoNumberPicker(hour, onHour, 0..23, wheel, wrap = true, format = { "%02d".format(it) })
+            CoNumberPicker(hour, onHour, 0..23, wrap = true, format = { "%02d".format(it) })
             CoText(":", style = CoTokens.Type.headlineM)
-            CoNumberPicker(minute, onMinute, 0..59, wheel, wrap = true, format = { "%02d".format(it) })
+            CoNumberPicker(minute, onMinute, 0..59, wrap = true, format = { "%02d".format(it) })
         }
     }
 }
