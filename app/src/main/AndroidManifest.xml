@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- 重启后补排闹钟（BootReceiver） -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- 响铃页的盲操手势要用真震动（Vibrator + 指定强度）。没有这条权限，
          Vibrator 会静默失败，只剩系统那种几乎感觉不到的触感反馈。 -->
     <uses-permission android:name="android.permission.VIBRATE"/>
@@ -43,6 +45,15 @@
         <receiver
             android:name=".AlarmReceiver"
             android:exported="false" />
+        <!-- 开机和覆盖安装的广播都由系统发出，exported=false 也收得到，别的应用发不进来 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
         <service
             android:name=".AlarmSoundService"
             android:exported="false"

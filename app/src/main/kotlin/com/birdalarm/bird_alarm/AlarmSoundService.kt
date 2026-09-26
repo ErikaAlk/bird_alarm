@@ -1,6 +1,5 @@
 package com.birdalarm.bird_alarm
 
-import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -110,28 +109,7 @@ class AlarmSoundService : Service() {
         // 它据此判断这一轮是贪睡、不重排（没有启用的闹钟时重排会把贪睡一起撤掉）
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().putLong(SNOOZE_UNTIL, triggerAt).apply()
         NativeAlarmPlayer.stop(this)
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pendingIntent = alarmBroadcastPendingIntent(this, SNOOZE_REQUEST_CODE)
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAt,
-                    pendingIntent
-                )
-            } else {
-                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
-            }
-        } catch (_: Exception) {
-        }
-        // 贪睡期间显示倒计时通知（动态倒计时 +「关闭闹钟」按钮）：既预告「N 分钟后再响」，
-        // 也让用户能提前结束本次贪睡——按钮走 ACTION_CANCEL_UPCOMING → cancelUpcoming，会取消 1005。
-        AlarmReceiver.showCountdownNotification(
-            this,
-            triggerAt,
-            "😴 贪睡中",
-            "稍后再次响铃，点“关闭闹钟”可提前结束",
-        )
+        armSnooze(this, triggerAt)
         val notificationManager =
             getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel(NOTIFICATION_ID)

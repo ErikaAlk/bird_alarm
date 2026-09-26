@@ -51,6 +51,22 @@ fun alarmBroadcastPendingIntent(context: Context, requestCode: Int): PendingInte
     )
 }
 
+// 在 triggerAt 排贪睡(1005)，并显示「贪睡中」倒计时通知（可点「关闭闹钟」提前结束，走 cancelUpcoming → cancelSnooze）。
+// snooze_until 由调用方先写好。响铃时点贪睡（AlarmSoundService.snooze）和开机补排（BootReceiver）共用。
+fun armSnooze(context: Context, triggerAt: Long) {
+    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val pendingIntent = alarmBroadcastPendingIntent(context, AlarmSoundService.SNOOZE_REQUEST_CODE)
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
+        }
+    } catch (_: Exception) {
+    }
+    AlarmReceiver.showCountdownNotification(context, triggerAt, "😴 贪睡中", "稍后再次响铃，点“关闭闹钟”可提前结束")
+}
+
 // 撤掉贪睡(1005)一律走这里：闹钟和 snooze_until 要一起清，只撤闹钟不清记录的话，
 // 界面会以为还有贪睡在等、响铃结束时跳过重排（AlarmControl.snoozePending）。
 fun cancelSnooze(context: Context) {

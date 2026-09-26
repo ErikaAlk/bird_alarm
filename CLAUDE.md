@@ -31,6 +31,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **引擎是闹钟的真正执行者**，App 关闭也能响：
   - `AlarmShared.kt`：排程工具函数（`armAlarmAt`、`armNextUpcoming`、「已守护」通知 id=`1011`）和 `AlarmControl`（界面对引擎的全部操作：`schedule`/`cancel`/`stopSound`/`snooze`/`test`/`saveFadeIn`，Flutter 时代是 MethodChannel 的那一串方法）。
     排闹钟只用 `AlarmManager.setAlarmClock` + `setExactAndAllowWhileIdle`，**不挂前台服务**（整夜挂前台是耗电元凶）。
+  - `BootReceiver.kt`：收 `BOOT_COMPLETED` / `MY_PACKAGE_REPLACED`，清掉残留的 `ringing_asset`，按 `upcoming_triggers` 补排最近一次（`armNextUpcoming`），
+    `snooze_until` 没过就按原请求码 1005 补排贪睡（`armSnooze`，和 `AlarmSoundService.snooze()` 共用）。不起 Store，所以 8 次都过完（关机太久）就只能等打开 App。
+    **不收 `LOCKED_BOOT_COMPLETED`**：`bird_alarm_native` 在凭据加密存储里，开机后第一次解锁之前读不到，这段时间闹钟不会响。
+    要补上得把引擎 prefs 挪到设备加密存储（`createDeviceProtectedStorageContext`）并给接收器、服务、播放链路都标 `directBootAware`，下载的鸟鸣也在凭据存储里，解锁前只能放内置的。
+    验证方法：模拟器上 `adb reboot`，不打开 App，`dumpsys alarm` 里应有 `com.birdalarm.bird_alarm` 的三条（响铃前倒计时、`setAlarmClock`、精确闹钟），贪睡中重启还有 1005 那条。
+    对照用 `pm disable com.birdalarm.bird_alarm/.BootReceiver`，**等它写进 `/data/system/users/0/package-restrictions.xml` 再重启**，否则停用没落盘、重启后照样生效。
+    2026-09-26 在 API 36 模拟器上实测：`adb install -r` 本身不清闹钟（停用接收器照样在），`MY_PACKAGE_REPLACED` 只是兜底（ColorOS 真机上覆盖安装会不会清闹钟没验证过）。
   - `AlarmReceiver.kt`：闹钟广播，起前台服务、播声音、响铃前 10 分钟倒计时通知；响铃那一刻清掉「已守护」通知。
   - `AlarmSoundService.kt`：前台服务，持续播放 + 响铃通知（id=`1001`，唯一）+ 贪睡（`ACTION_SNOOZE`，5 分钟）。只在真正响铃时存在；`ACTION_ARM` 只有「测试闹钟」在用。
   - `NativeAlarmPlayer.kt`：`MediaPlayer` 播放；`ensureRingingAsset()` 在响铃那一刻随机选鸟并写入 `ringing_asset`；闹铃渐响（读 `fade_in_seconds`）。
@@ -108,7 +115,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **行尾 ">" 箭头 = 进下一页**（权限自检、关于、xeno-canto 查询）；单个文本输入（webhook、API Key）开面板、行尾只写当前值不带箭头；
   就地执行的动作（测试闹钟）写「运行」；跳外部的行用外链图标。
 - **「还有多久响铃」只在 App 内**（闹钟页大标题下的状态行），不为它加常驻通知。
-- 已知遗留（1.x 就有）：自定义规则一天都不选时**每天都响**（界面如实写「每天」），没有「只响一次」；重启后到第一次打开 App 之前闹钟不会重排（没有开机广播）。
+- 已知遗留（1.x 就有）：自定义规则一天都不选时**每天都响**（界面如实写「每天」），没有「只响一次」。
 
 ## 仓库约定
 
