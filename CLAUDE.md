@@ -55,11 +55,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 遵循全局 DESIGN.md（`DESIGN_SYSTEM_REVISION = "2026.09.24-coloros17"`，写在 `ui/Page.kt`），界面只用 coloros-ui-kit 的组件和 token。
   库里缺的通用件、库的 bug 修在库里，不在这里另起一套。
 - 主题色是薄荷绿，按设计库 README 的比例自己派生（`BirdThemeColor`）。十六进制只在主题色、冷启动底色（`res/values*/themes.xml`，库 `bgGrouped` 的镜像）和插画里出现。
-- **滚轮 `CoNumberPicker` 要明确给宽度**（`Modifier.width(CoTokens.Picker.minWidth)`）：库里 2026-09-26 以前的版本只靠 `widthIn(min)` 时画布实际宽 0，数字全被裁掉。
-  修复在设计库 PR #14；合进 main 之前这边的规避不能删。
-- 面板里装卡片分组时，库修好后改用 `CoBottomSheet(grouped = true)`（同在 PR #14），否则亮色下白卡片放在白面板上看不出分组。
-- **闹钟卡片上的开关外面包了一层吃掉抬手**：库里的 `CoSwitch` 点按不消费事件，卡片的点击会跟着触发，一点开关就连编辑面板一起弹出，
-  而面板底部的“删除闹钟”正好在底栏的位置，连点两下就误删（2026-09-26 模拟器上真删掉过一个）。库的修复也在 PR #14，合进去之后才能去掉这层。
+- **面板里装卡片分组用 `CoBottomSheet(grouped = true)`**（编辑闹钟面板就是）：底色换成 surfaceGrouped，否则亮色下白卡片放在白面板上看不出分组。深色下两种底色相同。
+- 滚轮 `CoNumberPicker` 不用给宽度，默认 64dp；闹钟卡片上的 `CoSwitch` 直接放，点开关不会连带触发卡片点击。
+  这两处以前要在这边绕：滚轮画布宽 0、数字全被裁掉；一点开关连编辑面板一起弹出，面板底部的“删除闹钟”正好在底栏位置，连点两下就误删（2026-09-26 模拟器上真删掉过一个）。
+  修复在设计库 #14（`a4b4431`），**设计库主检出要包含它**，否则两个问题都会回来。
 
 ## 锁屏全屏响铃的关键约束（动 targetSdk 或响铃页前必读）
 
