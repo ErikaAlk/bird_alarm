@@ -60,75 +60,53 @@
 
 > 这些是各家 ROM 的私有权限，App 没法替你打开，需要你手动授权一次。授权后锁屏到点就会弹出全屏响铃页（关闭 / 贪睡），不再只是横幅。
 
-### iOS
-iOS 系统限制后台应用运行，建议将 App 保留在前台（锁屏前不要完全退出），或在锁屏前确认闹钟已设置成功。
-
 ## 使用 xeno-canto 搜索鸟声
 
-在鸟声库中点击搜索，输入鸟种名称（中文、英文或学名均可）即可从 xeno-canto 获取录音列表。如需更高请求额度，可在设置中填入个人 xeno-canto API Key。
+在“鸟鸣”页搜鸟种（中文、英文或学名都行），一键从 xeno-canto 下一条录音；“xeno-canto 高级查询”可以按 xeno-canto 的查询语法搜录音。
+xeno-canto 现在的查询接口要 API Key，在 xeno-canto.org 注册后个人页面里有免费的，填到“设置 - xeno-canto API Key”。
 
 ## 开发与构建
 
 > 这一节是给「下一次接着改」的人看的：现在是什么状态、怎么跑起来、坑在哪。
 > 架构细节和不该破坏的不变量在 [`CLAUDE.md`](CLAUDE.md)。
 
-### 怎么跑起来
-
-```bash
-flutter analyze   # Dart 改动的主要自验手段，不走 Gradle，秒级返回
-flutter test
-```
-
-出 APK 并装机（Windows 普通终端，`install.ps1` 是本地工具、在 `.gitignore` 里）：
+2.0 起是纯 Kotlin + Jetpack Compose 的 Android 工程，界面用设计库 [coloros-ui-kit](https://github.com/ErikaAlk/coloros-ui-kit)（私有）。
+**设计库要和本仓库并排放在同一个目录下**（`code/bird_alarm`、`code/coloros-ui-kit`），构建时经 `includeBuild` 直接编它的源码。
 
 ```powershell
-.\install.ps1          # 按设备架构构建 release + adb 覆盖安装 + 启动
-.\install.ps1 -Wsl     # 同上，但构建挪进 WSL：整套约 31 秒（Windows 上光 Gradle 就 50~84 秒）
-.\install.ps1 -AllAbi  # 发版：三个架构都出
+.\gradlew.bat :app:testDebugUnitTest   # 单测：排程、课表、节假日、文案、照片缓存、响铃手势
+.\gradlew.bat :app:assembleRelease     # 装机用的包：app\build\outputs\apk\release\app-release.apk
 ```
 
-`-Wsl` 会先把 Windows 的 `~/.android/debug.keystore` 同步进 WSL：release 是用 **debug 签名**打的
-（见 `android/app/build.gradle.kts`），两边 keystore 不同的话，WSL 出的包装不上 Windows 装过的应用
-（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），只能卸载重装、闹钟和设置全丢。
-
-手工构建等价于：
-
-```bash
-flutter build apk --release --split-per-abi --target-platform android-arm64  # 日常：只出要装的那个架构
-flutter build apk --release --split-per-abi                                  # 发版：三个架构都出
-```
-
-一律用 **release**，产物在 `build/app/outputs/flutter-apk/app-<abi>-release.apk`
-（arm64-v8a / armeabi-v7a / x86_64），装机和发版都以此为准。
-**日常别无脑三架构全出**：Dart AOT 按架构各跑一遍，而装机只用得上一个（WSL 实测 27 秒 vs 36 秒）。
-
-### 坑：Gradle 在 agent 的 shell 里起不来（用户自己的终端没问题）
-
-Claude 的 shell 里跑 `flutter build apk` 会挂在 Gradle 守护进程上：
-
-```
-java.io.IOException: Unable to establish loopback connection
-```
-
-2026-07-30 排查过一轮：沙箱 shell 和关掉沙箱的普通 shell **都失败**，
-`gradle.properties` 里加 `-Djava.net.preferIPv4Stack=true`、再额外设 `GRADLE_OPTS` 同样的值，
-**也没用**（IPv4 回环本身是通的，是 `Selector.open()` 那对 socket 建不起来）。
-
-**但这不是「机器坏了」**——用户自己的普通终端里 Windows 构建一直是好的：`~/.gradle/daemon/*.log`
-里 2026-06-23 到 07-27 每次构建都有记录（Gradle 段实测 50~84 秒），`build\` 里 07-27 的 APK 也对得上。
-所以分工是：**用户照常在 Windows 终端构建**（嫌慢就 `.\install.ps1 -Wsl`，构建挪到 WSL 的 ext4 上，
-快一倍）；**agent 要出 APK 一律走 WSL**：
-
-```bash
-wsl -d archlinux -- bash -lc 'cd ~/bird_alarm && ~/flutter/bin/flutter build apk --release --split-per-abi'
-```
-
-WSL 里是**独立的一份 clone**（`~/bird_alarm`，Flutter 在 `~/flutter/bin/flutter`，JDK Temurin 17），
-有自己的分支和未提交改动，构建前先 `git fetch && git pull` 对齐，别默认它跟 Windows 侧一致。
-（`install.ps1 -Wsl` 不用这个 clone，它是把 Windows 的工作树 rsync 到 `~/bird_alarm-build` 再构建，
-所以**未提交的改动也能装机**。）Dart 侧的 `flutter analyze` / `flutter test` 不走 Gradle，在 Windows 上照常用。
+- release 用 **debug 签名**打（见 `app/build.gradle.kts`），这样和 1.x 签名一致、能覆盖安装；换签名就只能卸载重装，闹钟和设置全丢。
+- 从 1.x 覆盖安装时，第一次打开会把 Flutter 版存的闹钟、音库和设置原样搬过来（原文件不删）。
+- 只有一个通用包，不再按 CPU 架构拆。`install.ps1`（本地工具，在 `.gitignore` 里）负责构建 + adb 覆盖安装 + 启动。
+- agent 的 shell 里跑 Gradle 要先设 `$env:JAVA_TOOL_OPTIONS='-Djdk.net.unixdomain.tmpdir=C:\Windows\Temp'`，
+  否则报 `Unable to establish loopback connection`；设了就能直接在 Windows 构建，不用再去 WSL。
 
 ## 更新记录
+
+### v2.0.0（2026-09-26）
+
+- **整个 App 改用原生 Kotlin + Jetpack Compose 重写，不再用 Flutter**。闹钟引擎（排闹钟、响铃、贪睡、倒计时、Live Updates）沿用 1.x 的原生代码，
+  界面和业务逻辑全部重写。安装包从三个架构各 40 MB 变成一个 30 MB 的通用包（其中 23 MB 是内置鸟鸣）。
+- **界面按 ColorOS 17 的设计语言重做**（全局 DESIGN.md，设计库 coloros-ui-kit）：大标题、灰底白卡、悬浮底栏、COUI 开关 / 滚轮 / 分段按钮 / 面板。
+  - 闹钟页：大标题下一行“距离下次响铃还有 7 小时 3 分钟”，取代原来的报时卡；闹钟卡片是大号时间 + “重复 ｜ 标签”，关掉的闹钟变淡。新建闹钟改成右下角的悬浮按钮。
+  - 编辑闹钟改成面板：滚轮选时间，分段选重复规则，“课表”规则左右两组滚轮（早八 / 无早八）。长按闹钟卡片出“删除”，编辑面板里也能删；闹钟随手能重建，删除不再二次确认。
+  - 底栏从四个 tab 变成三个（闹钟 / 鸟鸣 / 设置），“关于”收进设置最后一行。三个 tab 仍然可以左右滑动切换。
+  - 鸟鸣页：xeno-canto 高级查询从折叠面板改成单独一页；设置页里 webhook 地址和 API Key 改成点开面板填写。
+  - 响铃页：72dp 大号时间 + 闹钟名 + 正在叫的鸟，上滑关闭 / 下滑贪睡和三种震法不变。
+  - 主题色仍是薄荷绿，按 COUI 的比例派生，只点在开关、主按钮这类控件上。
+- **从 1.x 覆盖安装不丢数据**：第一次打开把 Flutter 版的闹钟、音库、下载的鸟鸣、设置、节假日缓存原样搬过来；覆盖安装后还没打开 App 就响铃，
+  内置鸟鸣也能正常播（1.x 给引擎的路径带 Flutter 的前缀，播放时会去掉）。versionCode 从 5041 起，比 1.x 按架构拆包的 2040 / 4040 大。
+- **行为调整与修复**：
+  - “测试闹钟”不再撤掉正常的闹钟。以前测试铃要是被贪睡掉，正常闹钟会一直空着，直到下次重排。
+  - 音库里只能在线播放的录音，下载到本机后替换掉原来那条，不再留两条。
+  - 自定义重复一天都不选时，闹钟其实每天都响（1.x 就是这样算的），卡片上改为如实写“每天”，不再写“仅一次”。
+  - xeno-canto 返回 401 / 403 时提示去设置里检查 API Key，不再只说“服务器返回 401”。
+  - 响铃页的状态完全跟着原生引擎走：通知里关掉、贪睡，响铃页立即收起，不再每秒轮询。
+- 构建：Gradle 9.7.1 / AGP 9.4.1 / Kotlin 2.4.20，compileSdk 37、targetSdk 36，minSdk 从 24 升到 26。单测从 Dart 移到 JVM（26 条）。
+  删掉了 Flutter 工程、iOS 工程和仓库里早年遗留的 `native_android/` 原型（原作者的另一版原生实现，已不用）。
 
 ### v1.6.1（2026-09-24）
 
