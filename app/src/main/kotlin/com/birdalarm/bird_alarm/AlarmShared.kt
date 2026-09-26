@@ -8,12 +8,36 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Build
 import android.os.PowerManager
+import android.os.UserManager
 
 // 原生侧各组件（接收器 / 服务 / 播放器 / 主活动）共用的状态存储文件名。集中成常量，避免某处手抄
 // 出错时静默读到一个空的 prefs，导致 ringing_asset / launch_alarm 等协调标志失灵、闹钟行为出错。
 const val PREFS_NAME = "bird_alarm_native"
+private const val KEY_IN_DEVICE_STORAGE = "moved_to_device_storage"
+
+/**
+ * 引擎 prefs 的唯一入口，谁都别再直接 getSharedPreferences(PREFS_NAME)。
+ * 放在设备加密存储里：手机夜里重启、早上还没解锁时，开机补排（LOCKED_BOOT_COMPLETED）和闹钟广播也读得到。
+ * 2.0.2 及以前（含 Flutter 版）在凭据加密存储，解锁后第一次用到时整份搬过来，只搬一次。
+ * 搬之前解锁前写进来的（开机补排清 ringing_asset 之类）会被旧数据盖掉，本来也没用。
+ */
+@Synchronized
+fun nativePrefs(context: Context): SharedPreferences {
+    val app = context.applicationContext
+    val storage = app.createDeviceProtectedStorageContext()
+    val prefs = storage.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    if (prefs.getBoolean(KEY_IN_DEVICE_STORAGE, false) || !app.getSystemService(UserManager::class.java).isUserUnlocked) return prefs
+    // 先等解锁前排队的 apply() 落盘，免得它晚到、把搬过来的文件盖掉。搬失败就不记标记，下次再搬
+    prefs.edit().commit()
+    if (!storage.moveSharedPreferencesFrom(app, PREFS_NAME)) return prefs
+    // 搬完会作废两边的缓存，要重新取一次
+    return storage.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).also {
+        it.edit().putBoolean(KEY_IN_DEVICE_STORAGE, true).commit()
+    }
+}
 
 // Android 16 (API 36) 把常驻通知请求提级为 Live Update 用的 extra key。
 // 用字符串字面量而非 compileSdk 36 才有的符号，低版本上自动忽略。
@@ -72,7 +96,7 @@ fun armSnooze(context: Context, triggerAt: Long) {
 fun cancelSnooze(context: Context) {
     (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
         .cancel(alarmBroadcastPendingIntent(context, AlarmSoundService.SNOOZE_REQUEST_CODE))
-    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().remove(AlarmSoundService.SNOOZE_UNTIL).apply()
+    nativePrefs(context).edit().remove(AlarmSoundService.SNOOZE_UNTIL).apply()
 }
 
 // setAlarmClock 的 show-intent：点系统状态栏「下一个闹钟」芯片时打开本应用（仅查看入口，不带 launch_alarm）。
@@ -188,12 +212,12 @@ fun armAlarmAt(context: Context, triggerAtMillis: Long) {
 // App 下发的「接下来若干次」发生时刻（逗号分隔的毫秒）。原生据此在每次响铃后/关闭后推进、续排下一次，
 // 这样相近的多个闹钟也能一个接一个自动排上，不依赖打开 App。App 每次同步会刷新整张表。
 fun saveUpcomingTriggers(context: Context, csv: String) {
-    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    nativePrefs(context)
         .edit().putString("upcoming_triggers", csv).apply()
 }
 
 fun readUpcomingTriggers(context: Context): List<Long> {
-    val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val raw = nativePrefs(context)
         .getString("upcoming_triggers", null)
     if (raw.isNullOrBlank()) return emptyList()
     return raw.split(",").mapNotNull { it.trim().toLongOrNull() }.sorted()
@@ -211,11 +235,9 @@ fun armNextUpcoming(context: Context, throughMillis: Long) {
 
 /**
  * 界面层对原生闹钟引擎的全部操作（Flutter 版里是 MethodChannel 的那一串方法）。
- * 状态都在 [PREFS_NAME] 这份 prefs 里：响铃发生在原生侧，那一刻 App 可能根本没在跑。
+ * 状态都在 [nativePrefs] 这份 prefs 里：响铃发生在原生侧，那一刻 App 可能根本没在跑。
  */
 object AlarmControl {
-    private fun prefs(context: Context) = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-
     /**
      * 排下一次响铃。不在这里挂前台服务（那会整夜挂前台、是耗电元凶），只排精确闹钟，到点由
      * AlarmReceiver 起前台服务播音。[upcoming] 是「接下来若干次」，响铃后 / 在通知里关掉后原生据此续排。
@@ -255,7 +277,7 @@ object AlarmControl {
      */
     fun stopSound(context: Context) {
         context.stopService(Intent(context, AlarmSoundService::class.java))
-        prefs(context).edit().remove("ringing_asset").putBoolean("launch_alarm", false).apply()
+        nativePrefs(context).edit().remove("ringing_asset").putBoolean("launch_alarm", false).apply()
     }
 
     /** 贪睡交给前台服务：停当前铃 + N 分钟后重排。服务此时已在前台运行，startService 即可送达。 */
@@ -268,7 +290,7 @@ object AlarmControl {
      * （Flutter 版会撤，测试铃要是被贪睡掉，正常闹钟就一直空着，直到下次重排）。
      */
     fun test(context: Context) {
-        prefs(context).edit().putBoolean("launch_alarm", false).apply()
+        nativePrefs(context).edit().putBoolean("launch_alarm", false).apply()
         val intent = Intent(context, AlarmSoundService::class.java)
             .setAction(AlarmSoundService.ACTION_ARM)
             .putExtra(AlarmSoundService.EXTRA_TRIGGER_AT_MILLIS, System.currentTimeMillis() + 10_000)
@@ -276,28 +298,28 @@ object AlarmControl {
     }
 
     /** 本轮正在响的鸟鸣（原生引用路径）；没在响返回 null。响铃页是否显示只看它。 */
-    fun ringingAsset(context: Context): String? = prefs(context).getString("ringing_asset", null)
+    fun ringingAsset(context: Context): String? = nativePrefs(context).getString("ringing_asset", null)
 
     /** 被「倒计时通知 → 关闭闹钟」跳过的那一次（毫秒）；无则 0。重排时跳过它，免得关了又被排回来。 */
-    fun skippedTrigger(context: Context): Long = prefs(context).getLong("skip_trigger_at", 0L)
+    fun skippedTrigger(context: Context): Long = nativePrefs(context).getLong("skip_trigger_at", 0L)
 
     /** 有贪睡在等（通知栏或响铃页上点的都算）：这一轮响完不重排，免得把贪睡撤掉。 */
     fun snoozePending(context: Context): Boolean =
-        prefs(context).getLong(AlarmSoundService.SNOOZE_UNTIL, 0L) > System.currentTimeMillis()
+        nativePrefs(context).getLong(AlarmSoundService.SNOOZE_UNTIL, 0L) > System.currentTimeMillis()
 
-    fun hasPendingLaunch(context: Context): Boolean = prefs(context).getBoolean("launch_alarm", false)
+    fun hasPendingLaunch(context: Context): Boolean = nativePrefs(context).getBoolean("launch_alarm", false)
 
     fun clearPendingLaunch(context: Context) {
-        prefs(context).edit().putBoolean("launch_alarm", false).apply()
+        nativePrefs(context).edit().putBoolean("launch_alarm", false).apply()
     }
 
     /** 渐响时长写进原生 prefs：响铃那一刻 App 可能没在跑，不能指望响铃时回头问界面要。 */
     fun saveFadeIn(context: Context, seconds: Int) {
-        prefs(context).edit().putInt("fade_in_seconds", seconds.coerceIn(0, 300)).apply()
+        nativePrefs(context).edit().putInt("fade_in_seconds", seconds.coerceIn(0, 300)).apply()
     }
 
     private fun saveSoundPool(context: Context, pool: List<Pair<String, String>>) {
-        val editor = prefs(context).edit()
+        val editor = nativePrefs(context).edit()
         if (pool.isEmpty()) {
             editor.remove("sound_pool").remove("sound_names")
         } else {

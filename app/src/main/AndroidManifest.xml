@@ -42,20 +42,26 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- directBootAware：手机重启后还没解锁也要能补排、响铃。这三个只用设备加密存储里的引擎 prefs（nativePrefs）
+             和 APK 里的内置鸟鸣，别在里面碰凭据加密存储（bird_alarm_app、filesDir），解锁前读不到 -->
         <receiver
             android:name=".AlarmReceiver"
+            android:directBootAware="true"
             android:exported="false" />
         <!-- 开机和覆盖安装的广播都由系统发出，exported=false 也收得到，别的应用发不进来 -->
         <receiver
             android:name=".BootReceiver"
+            android:directBootAware="true"
             android:exported="false">
             <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
             </intent-filter>
         </receiver>
         <service
             android:name=".AlarmSoundService"
+            android:directBootAware="true"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
     </application>

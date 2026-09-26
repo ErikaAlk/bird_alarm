@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Windows 上跑 Gradle 先设** `$env:JAVA_TOOL_OPTIONS='-Djdk.net.unixdomain.tmpdir=C:\Windows\Temp'`，否则 agent 的 shell 里报
   `Unable to establish loopback connection`。设了就能在 Windows 直接构建，不用再去 WSL（Flutter 时代的 WSL 构建路径作废）。
 - `.\gradlew.bat :app:testDebugUnitTest`：JVM 单测（`app/src/test`）。排程与课表 / 节假日（`ScheduleTest`）、倒计时和文案、每日一鸟（`TextTest`）、
-  照片查找与缓存（`BirdPhotosTest`）、响铃页手势与三种震法（`RingGestureTest`）。改了逻辑必跑。
+  照片查找与缓存（`BirdPhotosTest`）、响铃页手势与三种震法（`RingGestureTest`）、响铃抽鸟（`RingPoolTest`）。改了逻辑必跑。
 - `.\gradlew.bat :app:assembleRelease`：日常装机的包，`app\build\outputs\apk\release\app-release.apk`（单个通用包，没有原生库，不用再按架构拆）。
   Windows 上改一处重新构建约 1 分钟。
 - **release 一直用 debug 签名**（`app/build.gradle.kts` 写死），换签名就装不上旧版，只能卸载重装、闹钟和设置全丢。
@@ -31,11 +31,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **引擎是闹钟的真正执行者**，App 关闭也能响：
   - `AlarmShared.kt`：排程工具函数（`armAlarmAt`、`armNextUpcoming`、「已守护」通知 id=`1011`）和 `AlarmControl`（界面对引擎的全部操作：`schedule`/`cancel`/`stopSound`/`snooze`/`test`/`saveFadeIn`，Flutter 时代是 MethodChannel 的那一串方法）。
     排闹钟只用 `AlarmManager.setAlarmClock` + `setExactAndAllowWhileIdle`，**不挂前台服务**（整夜挂前台是耗电元凶）。
-  - `BootReceiver.kt`：收 `BOOT_COMPLETED` / `MY_PACKAGE_REPLACED`，清掉残留的 `ringing_asset`，按 `upcoming_triggers` 补排最近一次（`armNextUpcoming`），
+  - `BootReceiver.kt`：收 `LOCKED_BOOT_COMPLETED` / `BOOT_COMPLETED` / `MY_PACKAGE_REPLACED`，清掉残留的 `ringing_asset`（本进程正在响就不清，见下），按 `upcoming_triggers` 补排最近一次（`armNextUpcoming`），
     `snooze_until` 没过就按原请求码 1005 补排贪睡（`armSnooze`，和 `AlarmSoundService.snooze()` 共用）。不起 Store，所以 8 次都过完（关机太久）就只能等打开 App。
-    **不收 `LOCKED_BOOT_COMPLETED`**：`bird_alarm_native` 在凭据加密存储里，开机后第一次解锁之前读不到，这段时间闹钟不会响。
-    要补上得把引擎 prefs 挪到设备加密存储（`createDeviceProtectedStorageContext`）并给接收器、服务、播放链路都标 `directBootAware`，下载的鸟鸣也在凭据存储里，解锁前只能放内置的。
-    验证方法：模拟器上 `adb reboot`，不打开 App，`dumpsys alarm` 里应有 `com.birdalarm.bird_alarm` 的三条（响铃前倒计时、`setAlarmClock`、精确闹钟），贪睡中重启还有 1005 那条。
+    **重启后不解锁也能排、能响**（v2.0.3）：`BootReceiver` / `AlarmReceiver` / `AlarmSoundService` 标了 `directBootAware`，引擎 prefs 在设备加密存储（见下）。
+    这三个组件和它们调到的代码**只能碰设备加密存储和 APK 里的东西**：`bird_alarm_app`、`filesDir`、`cacheDir` 解锁前都读不到（凭据加密存储），
+    下载的鸟鸣也在那里，所以 `ringablePool()` 会跳过读不到的文件、只从内置的里抽。
+    解锁后还会再来一次 `BOOT_COMPLETED`：响铃中解锁时进程还在响，**不能无条件 `stopSound`**，否则一解锁铃就停了，所以先看 `NativeAlarmPlayer.isPlaying()`。
+    **解锁前没有全屏响铃页**：`MainActivity` 不是 `directBootAware`（`Store.init` 要读凭据存储），全屏意图和 `startActivity` 都拉不起它（logcat `result code=-92`），
+    锁屏上只有响铃通知，关闭 / 贪睡按钮不用解锁就能点。要做解锁前的响铃页，得让 MainActivity 在未解锁时跳过 Store、只画 `RingScreen`，解锁后再重建。
+    验证方法：模拟器上 `adb shell locksettings set-pin 1234` 设锁屏密码（没密码的话开机自动解锁，测不出来），`adb reboot`，不解锁，
+    `dumpsys user` 是 `RUNNING_LOCKED`，`dumpsys alarm` 里应有 `com.birdalarm.bird_alarm` 的三条（响铃前倒计时、`setAlarmClock`、精确闹钟），贪睡中重启还有 1005 那条。
+    测完 `locksettings clear --old 1234`。几个坑：重启前**别 `am force-stop`**（包进入 stopped 状态，开机广播都不发给它，用 HOME + `am kill`）；
+    未解锁时 `/sdcard` 不可用，`uiautomator dump` 要写到 `/data/local/tmp`；`adb root` 重启后要重新执行。
     对照用 `pm disable com.birdalarm.bird_alarm/.BootReceiver`，**等它写进 `/data/system/users/0/package-restrictions.xml` 再重启**，否则停用没落盘、重启后照样生效。
     2026-09-26 在 API 36 模拟器上实测：`adb install -r` 本身不清闹钟（停用接收器照样在），`MY_PACKAGE_REPLACED` 只是兜底（ColorOS 真机上覆盖安装会不会清闹钟没验证过）。
   - `AlarmReceiver.kt`：闹钟广播，起前台服务、播声音、响铃前 10 分钟倒计时通知；响铃那一刻清掉「已守护」通知。
@@ -43,7 +50,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `NativeAlarmPlayer.kt`：`MediaPlayer` 播放；`ensureRingingAsset()` 在响铃那一刻随机选鸟并写入 `ringing_asset`；闹铃渐响（读 `fade_in_seconds`）。
   - `BirdAlarmAssets.kt`：内置 10 种鸟鸣（`starters`，音库和原生共用这一份）。
   - `DownloadNotifier.kt`：下载进度通知（id=`1013`，Live Update）。`AudioTranscoder.kt`：下载后转 m4a 并放大 2.5 倍，**必须在后台线程调**。
-  - 引擎状态都在 prefs `bird_alarm_native`（`ringing_asset`、`launch_alarm`、`upcoming_triggers`、`sound_pool`、`sound_names`、`skip_trigger_at`、`snooze_until`、`fade_in_seconds`）。
+  - 引擎状态都在 prefs `bird_alarm_native`，**一律经 `nativePrefs(context)` 取**（`AlarmShared.kt`），别再直接 `getSharedPreferences(PREFS_NAME)`：
+    它在设备加密存储（`/data/user_de/0/<包名>/shared_prefs/`），2.0.2 及以前在凭据加密存储，解锁后第一次用到时 `moveSharedPreferencesFrom` 整份搬过来，
+    搬完记 `moved_to_device_storage`，只搬一次（覆盖安装时 `MY_PACKAGE_REPLACED` 就会触发）。键：`ringing_asset`、`launch_alarm`、`upcoming_triggers`、`sound_pool`、`sound_names`、`skip_trigger_at`、`snooze_until`、`fade_in_seconds`。
 - **界面层**：
   - `Store.kt`：进程级单例，界面全部状态（Compose state）和业务：闹钟、音库、设置、下载、试听、光闹钟推送。`sync()` 把「接下来 8 次」交给引擎并推给 HA。
     App 自己的数据在 prefs `bird_alarm_app`。

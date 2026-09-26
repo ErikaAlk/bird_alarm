@@ -10,6 +10,17 @@ import android.os.Looper
 import android.os.SystemClock
 import java.io.File
 
+/**
+ * 响铃时能抽的鸟鸣：App 下发的完整音库（换行分隔，含下载到本机的），为空时回退内置 10 个。
+ * 下载的在凭据加密存储里，手机重启后还没解锁时读不到（文件被删了也一样），这时只从内置的里抽，
+ * 免得退成系统铃声、通知里的鸟名也对不上。
+ */
+fun ringablePool(raw: String?, canRead: (String) -> Boolean = { File(it).canRead() }): List<String> =
+    raw?.split('\n')
+        ?.filter { it.isNotBlank() && (!it.startsWith("/") || canRead(it)) }
+        ?.takeIf { it.isNotEmpty() }
+        ?: BirdAlarmAssets.sounds
+
 object NativeAlarmPlayer {
     private var player: MediaPlayer? = null
 
@@ -24,8 +35,7 @@ object NativeAlarmPlayer {
     // 渐响时长（秒）；0 = 关闭渐响，一上来就是满音量。由设置页（Store.syncSoundSettings）
     // 写进同一份 prefs，响铃那一刻读。
     fun fadeInSeconds(context: Context): Int =
-        context.applicationContext
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        nativePrefs(context)
             .getInt("fade_in_seconds", 0)
 
     // 音量从 FADE_START_VOLUME 平滑爬到满音量。用平方曲线：人耳对低音量更敏感，
@@ -62,16 +72,9 @@ object NativeAlarmPlayer {
 
     // 决定本轮响铃的鸟鸣并持久化（若已决定则复用）。在建通知前调用，确保通知能显示正确鸟名。
     fun ensureRingingAsset(context: Context): String {
-        val prefs = context.applicationContext
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = nativePrefs(context)
         prefs.getString("ringing_asset", null)?.let { return it }
-        // 从 App 下发的完整音库（含下载到本机的鸟鸣）里随机选；为空时回退内置 10 个。
-        val pool = prefs.getString("sound_pool", null)
-            ?.split('\n')
-            ?.filter { it.isNotBlank() }
-            ?.takeIf { it.isNotEmpty() }
-            ?: BirdAlarmAssets.sounds
-        return pool.random().also {
+        return ringablePool(prefs.getString("sound_pool", null)).random().also {
             prefs.edit().putString("ringing_asset", it).apply()
         }
     }
@@ -144,8 +147,7 @@ object NativeAlarmPlayer {
             } catch (_: Exception) {
             }
             player = null
-            appContext
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            nativePrefs(appContext)
                 .edit()
                 .remove("ringing_asset")
                 .apply()
@@ -162,8 +164,7 @@ object NativeAlarmPlayer {
             release()
         }
         player = null
-        context.applicationContext
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        nativePrefs(context)
             .edit()
             .remove("ringing_asset")
             .putBoolean("launch_alarm", false)
