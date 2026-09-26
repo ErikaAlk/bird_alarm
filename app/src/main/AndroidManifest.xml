@@ -1,0 +1,55 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Android 16 Live Updates（提级常驻通知）所需，安装时授予、无需运行时弹窗 -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- 响铃页的盲操手势要用真震动（Vibrator + 指定强度）。没有这条权限，
+         Vibrator 会静默失败，只剩系统那种几乎感觉不到的触感反馈。 -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD"/>
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- 读 Cadence 课表（早八 / 无早八规则用）。Cadence 定义的 dangerous 权限，装了 Cadence 才有意义。 -->
+    <uses-permission android:name="click.erikaalk.cadence.permission.READ_SCHEDULE"/>
+    <application
+        android:label="鸟瘾闹钟"
+        android:icon="@drawable/ic_launcher_bird"
+        android:roundIcon="@drawable/ic_launcher_bird"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.BirdAlarm">
+        <!-- singleTask：全系统唯一实例。闹钟全屏 / 通知 / 状态栏闹钟芯片等任意途径用
+             FLAG_ACTIVITY_NEW_TASK 拉起，都复用同一实例(onNewIntent)，不再在「最近任务」里
+             分裂出第二张卡片。singleTask 同时提供 StrandHogg 防护。
+             勿改回 singleTop——那会让后台拉起时另开一个任务实例。
+             showWhenLocked：锁屏全屏响铃的命脉（见 CLAUDE.md），别为了「锁屏不显示应用」去掉。 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <receiver
+            android:name=".AlarmReceiver"
+            android:exported="false" />
+        <service
+            android:name=".AlarmSoundService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+    </application>
+    <queries>
+        <!-- Android 11 起看不见别的应用的 provider，要在这里点名 Cadence 的课表接口。 -->
+        <provider android:authorities="click.erikaalk.cadence.schedule" />
+    </queries>
+</manifest>
